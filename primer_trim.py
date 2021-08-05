@@ -153,6 +153,7 @@ for r in bam:
 			for i in reversed(range(0, len(newcigar))):
 				cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
 			
+			r.cigartuples = newcigar
 			r.cigarstring = cigarstr
 	else: # We are a forward read, so we want to continue forwards
 		# Check what is overlapping from the start of the reverse (the end of the read)
@@ -234,6 +235,7 @@ for r in bam:
 			for i in range(0, len(newcigar)):
 				cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
 
+			r.cigartuples = newcigar
 			r.cigarstring = cigarstr
 
 			# Move our position on the reference forward, if needed
