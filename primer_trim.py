@@ -15,8 +15,8 @@ BAM_CDIFF = 8
 BAM_CBACK = 9
 
 # File opening and handling, currently hard coded for ease of development
-bam = pysam.AlignmentFile("Mapped1.bam", "rb")
-output = pysam.AlignmentFile("Trimmed1.sam", "w", header=bam.header)
+bam = pysam.AlignmentFile("Mapped.bam", "rb")
+output = pysam.AlignmentFile("Trimmed_Primer_Only.sam", "w", header=bam.header)
 primerFile = open("/home/josh/ivar-examples/primers/swift/sarscov2_v2_primers.bed")
 
 # Information about cigar operations
@@ -73,7 +73,6 @@ def getPosOnQuery(cigar, pos, seg_start):
 		
 	# We ran out of operations, so it must be here (or outside our query)
 	return queryPos
-
 # Iterating through the reads
 reads = []
 for r in bam:
@@ -118,6 +117,7 @@ for r in bam:
 				# If we have nothing left to delete and are consuming both, we want to just append everything
 				if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
 					pos_start = True
+					newcigar.append(operation) # Remember we need to include this one!
 					continue
 				
 				# If our operation consumes the query
@@ -192,6 +192,7 @@ for r in bam:
 				# If we have nothing left to delete and are consuming both, we want to just append everything
 				if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
 					pos_start = True
+					newcigar.append(operation) # Remember we need to include this one!
 					continue
 				
 				# How much our current trim affects our read's start position
@@ -241,7 +242,6 @@ for r in bam:
 			# Move our position on the reference forward, if needed
 			r.reference_start += start_pos
 
-	
 	# Append the trimmed read
 	reads.append(r)
 
