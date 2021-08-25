@@ -42,7 +42,7 @@ def variant():
     ##decide min threshold for (number of base/number of reads)
     min_threshold = 0.03
 
-    ##ref_length
+    ##ref_length: the length of the reference sequence
     ref_length = bam.lengths
 
     ##an array of length ref_length that hold bucket for each reference position
@@ -53,36 +53,34 @@ def variant():
 
     ##region: the name of the reference sequence
     region = bam.references[0]
-    ##ref_length: the length of the reference sequence
-    ref_length = bam.lengths
     ##reference_sequence: an array of ACGT of the reference sequence itself
     reference_sequence = parse_reference(reference_file)
 
     ##write to output file
     outf = open('output.txt', 'w')
     outf.write(
-        "REGION\tPOS\tREF\tALT\tREF_DP\tREF_RV\tREF_QUAL\tALT_DP\tALT_RV\tALT_QUAL\tALT_FREQ\tTOTAL_DP\tPVAL\tPASS\tGFF_FEATURE\tREF_CODON\tREF_AA\tALT_CODON\tALT_AA")
+        "REGION\tPOS\tREF\tALT\tREF_DP\tREF_RV\tREF_QUAL\tALT_DP\tALT_RV\tALT_QUAL\tALT_FREQ\tTOTAL_DP\tPVAL\tPASS\tGFF_FEATURE\tREF_CODON\tREF_AA\tALT_CODON\tALT_AA\n")
 
+    ##TODO: in this example, stepper causes no difference, how about other sample that has flags set?
     for pc in bam.pileup(ignore_orphans=False, min_base_quality=0, compute_baq=False, max_depth=8000,
                          stepper='samtools'):
         ##mqual: an array of mapping qualities
-        mqual = pc.get_mapping_qualities()
+        mqual = pc.get_query_qualities()
         ##qseq: an array of query sequences
         qseq = pc.get_query_sequences(mark_matches=True, mark_ends=True, add_indels=True)
         ##ref_pos: the position on the reference
         ref_pos = pc.reference_pos
 
         ##mdepth: how many reads are aligned at this ref_pos
-        ##TODO: what is this difference to PileupColumn.get_num_aligned()
-        mdepth = len(qseq)
-        print('mdepth:', mdepth, ' num_aligned:', pc.get_num_aligned)
+        ##len(qseq) != PileupColumn.get_num_aligned(), the latter one is same to the mpileup in samstool
+        mdepth = pc.get_num_aligned()
 
         ##if there is no read aligned, skip this ref_pos and keep everything 0
-        if (mdepth == 0):
+        if mdepth == 0:
             continue
 
         ##otherwise add the total_depth of this specific ref_pos by mdepth
-        buckets_array[ref_pos].total_depth += mdepth
+        buckets_array[ref_pos].total_depth = mdepth
 
         ##i: position in mqual
         ##j
@@ -113,14 +111,64 @@ def variant():
             if b == '':
                 continue
 
+            ##put insertion and deletion before the min_qual filter to let +/- all have min_qual
+
+            ##in case of addition(+) or deletion(-)
+            ##format: reference_base +/- bases
+            if len(b) > 1:
+                if b[1] == '+':
+                    exist = False
+                    ##insertN is an array of array
+                    ##subarr is [the specific bases added, the total number this bases showed up, total quality score added]
+                    ##TODO: implement reverse strand count
+                    for subarr in buckets_array[ref_pos].insertN:
+                        ##Store uppercase string, use subarr[3] to record reverse read
+                        if subarr[0] == b[1:].upper():
+                            subarr[1] += 1
+                            subarr[2] += min_qual
+                            if not b[1:0].isupper():
+                                subarr[3] += 1
+                            exist = True
+                            break
+                    if not exist:
+                        subarr = list()
+                        subarr.append(b[1:].upper())
+                        subarr.append(1)
+                        subarr.append(min_qual)
+                        if not b[1:].isupper():
+                            subarr.append(1)
+                        else:
+                            subarr.append(0)
+                        buckets_array[ref_pos].insertN.append(subarr)
+                elif b[1] == '-':
+                    exist = False
+                    for subarr in buckets_array[ref_pos].deleteN:
+                        if subarr[0] == b[1:].upper():
+                            subarr[1] += 1
+                            subarr[2] += min_qual
+                            if not b[1].isupper():
+                                subarr[3] += 1
+                            exist = True
+                            break
+                    if not exist:
+                        subarr = list()
+                        subarr.append(b[1:].upper())
+                        subarr.append(1)
+                        subarr.append(min_qual)
+                        if not b[1:].isupper():
+                            subarr.append(1)
+                        else:
+                            subarr.append(0)
+                        buckets_array[ref_pos].deleteN.append(subarr)
+
             ##filter base with too low quality score
-            if (mqual[i] < min_qual):
+            elif mqual[i] < min_qual:
                 continue
 
             ##each bucket has A,G,C,T array, which is
             ##[total number of this base(A+a), total number of reverse of this base(a), total quality score added]
             ##'ACGTN' are forward read, 'acgtn' are backward read
-            if (b == 'A'):
+            elif b == 'A':
                 buckets_array[ref_pos].A[0] += 1
                 buckets_array[ref_pos].A[2] += mqual[i]
             elif b == 'a':
@@ -154,60 +202,31 @@ def variant():
             ##TODO: what is reference deletion, what to do in reference deletion?
             elif b[0] == '*':
                 continue
-            ##in case of addition(+) or deletion(-)
-            ##format: reference_base +/- bases
-            elif len(b) > 1:
-                if b[1] == '+':
-                    exist = False
-                    ##insertN is an array of array
-                    ##subarr is [the specific bases added, the total number this bases showed up, total quality score added]
-                    ##TODO: implement reverse strand count
-                    for subarr in buckets_array[ref_pos].insertN:
-                        if subarr[0] == b[1:]:
-                            subarr[1] += 1
-                            subarr[2] += min_qual
-                            exist = True
-                            break
-                    if not exist:
-                        subarr = list()
-                        subarr.append(b[1:])
-                        subarr.append(1)
-                        subarr.append(min_qual)
-                        buckets_array[ref_pos].insertN.append(subarr)
-                elif b[1] == '-':
-                    exist = False
-                    for subarr in buckets_array[ref_pos].deleteN:
-                        if subarr[0] == b[1:]:
-                            subarr[1] += 1
-                            subarr[2] += min_qual
-                            exist = True
-                            break
-                    if not exist:
-                        subarr = list()
-                        subarr.append(b[1:])
-                        subarr.append(1)
-                        subarr.append(min_qual)
-                        buckets_array[ref_pos].deleteN.append(subarr)
             ##Testing
             else:
                 print(b)
 
     for ref_pos in range(ref_length[0]):
+
+        ##ref: reference base
         ref = reference_sequence[ref_pos]
         b = buckets_array[ref_pos]
 
+        ##calculate pdepth, used in case of insertion/deletion
         pdepth = 0
         pdepth += b.A[0]
         pdepth += b.C[0]
         pdepth += b.G[0]
         pdepth += b.T[0]
 
-        if (pdepth < min_depth):
+        ##check if pdepth pass threshold
+        if pdepth < min_depth:
+            continue
+        ##in case min_depth == 0, avoid error of dividing something by 0
+        if pdepth <= 0:
             continue
 
-        if (pdepth <= 0):
-            continue
-
+        ##calculate frequency depth of alternate bases ACGT
         A_freq_depth_0 = float(b.A[0]) / pdepth
         C_freq_depth_0 = float(b.C[0]) / pdepth
         G_freq_depth_0 = float(b.G[0]) / pdepth
@@ -228,40 +247,45 @@ def variant():
         if matchN[0] == 0:
             ref_mean_qual = 0
         else:
-            ref_mean_qual = float(matchN[2]) / matchN[0]
+            ref_mean_qual = int(matchN[2] / matchN[0])
 
         mdepth = b.total_depth
 
-        ##if any addition or deletion bases exceed min_threshold, print them
+        ##if any in/del exceed min_threshold, print them
         for subarr in b.insertN:
             freq_depth_temp = float(subarr[1]) / mdepth
             if freq_depth_temp >= min_threshold:
-                outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + subarr[0] + '\t' + str(
+                outf.write(str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + subarr[0] + '\t' + str(
                     matchN[0]) + '\t' + str(b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(
-                    subarr[1]) + '\t' + str(subarr[1]) + '\t' + str(float(subarr[2]) / subarr[1]) + '\t' + str(
-                    freq_depth_temp) + '\t' + str(mdepth) + '\n')
+                    subarr[1]) + '\t' + str(subarr[3]) + '\t' + str(int(subarr[2] / subarr[1])) + '\t' + str(
+                    round(freq_depth_temp, 6)) + '\t' + str(mdepth) + '\n')
         for subarr in b.deleteN:
             freq_depth_temp = float(subarr[1]) / mdepth
             if freq_depth_temp >= min_threshold:
-                outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + subarr[0] + '\t' + str(
+                outf.write(str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + subarr[0] + '\t' + str(
                     matchN[0]) + '\t' + str(b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(
-                    subarr[1]) + '\t' + str(subarr[1]) + '\t' + str(float(subarr[2]) / subarr[1]) + '\t' + str(
-                    freq_depth_temp) + '\t' + str(mdepth) + '\n')
+                    subarr[1]) + '\t' + str(subarr[3]) + '\t' + str(int(subarr[2] / subarr[1])) + '\t' + str(
+                    round(freq_depth_temp, 6)) + '\t' + str(mdepth) + '\n')
         ##if any ACGT base exceed min_threshold, print them
-        if (ref != 'A' and A_freq_depth_0 >= min_threshold):
-            outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + 'A' + '\t' + str(matchN[0]) + '\t' + str(
-                b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.A[0]) + '\t' + str(b.A[1]) + '\t' + str(
-                float(b.A[2]) / b.A[0]) + '\t' + str(A_freq_depth_0) + '\t' + str(pdepth) + '\n')
-        if (ref != 'C' and C_freq_depth_0 >= min_threshold):
-            outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + 'C' + '\t' + str(matchN[0]) + '\t' + str(
-                b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.C[0]) + '\t' + str(b.C[1]) + '\t' + str(
-                float(b.C[2]) / b.C[0]) + '\t' + str(C_freq_depth_0) + '\t' + str(pdepth) + '\n')
-        if (ref != 'G' and G_freq_depth_0 >= min_threshold):
-            outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + 'G' + '\t' + str(matchN[0]) + '\t' + str(
-                b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.G[0]) + '\t' + str(b.G[1]) + '\t' + str(
-                float(b.G[2]) / b.G[0]) + '\t' + str(G_freq_depth_0) + '\t' + str(pdepth) + '\n')
-        if (ref != 'T' and T_freq_depth_0 >= min_threshold):
-            outf.write(str(region) + '\t' + str(ref_pos) + '\t' + ref + '\t' + 'T' + '\t' + str(matchN[0]) + '\t' + str(
-                b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.T[0]) + '\t' + str(b.T[1]) + '\t' + str(
-                float(b.T[2]) / b.T[0]) + '\t' + str(T_freq_depth_0) + '\t' + str(pdepth) + '\n')
-        ##TODO: printing "\tPVAL\tPASS\tGFF_FEATURE\tREF_CODON\tREF_AA\tALT_CODON\tALT_AA"
+        if ref != 'A' and A_freq_depth_0 >= min_threshold:
+            ##TODO: print in VCF format
+            ##outf.write(str(region) + '\t' + str(ref_pos) + '\t' + '.' + '\t' + ref + '\t' + 'A' + '\t' +  str(int(b.A[2]/b.A[0])) + '\n')
+            outf.write(
+                str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'A' + '\t' + str(matchN[0]) + '\t' + str(
+                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.A[0]) + '\t' + str(b.A[1]) + '\t' + str(
+                    int(b.A[2] / b.A[0])) + '\t' + str(round(A_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
+        if ref != 'C' and C_freq_depth_0 >= min_threshold:
+            outf.write(
+                str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'C' + '\t' + str(matchN[0]) + '\t' + str(
+                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.C[0]) + '\t' + str(b.C[1]) + '\t' + str(
+                    int(b.C[2] / b.C[0])) + '\t' + str(round(C_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
+        if ref != 'G' and G_freq_depth_0 >= min_threshold:
+            outf.write(
+                str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'G' + '\t' + str(matchN[0]) + '\t' + str(
+                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.G[0]) + '\t' + str(b.G[1]) + '\t' + str(
+                    int(b.G[2] / b.G[0])) + '\t' + str(round(G_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
+        if ref != 'T' and T_freq_depth_0 >= min_threshold:
+            outf.write(
+                str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'T' + '\t' + str(matchN[0]) + '\t' + str(
+                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.T[0]) + '\t' + str(b.T[1]) + '\t' + str(
+                    int(b.T[2] / b.T[0])) + '\t' + str(round(T_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
