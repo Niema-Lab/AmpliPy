@@ -1,7 +1,7 @@
 import pysam
 import sys
 import numpy as np
-
+#import pdb
 # 'Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename'
 
 
@@ -20,7 +20,11 @@ class bucket:
 
 def parse_reference(ref_file):
     rstr = ''
-    f = open(ref_file, 'r')
+    try:
+        f = open(ref_file, 'r')
+    except FileNotFoundError:
+        print('Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename')
+        quit()
     lines = f.readlines()
     for l in lines:
         if l[0] == '>':
@@ -35,13 +39,13 @@ def variant():
     if not len(sys.argv) == 4:
         print('Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename')
 
-    ##Testing
-    test_arr_1 = [5941, [], []]
-    test_arr_2 = [15898, [], []]
-    test_arr_3 = [16538, [], []]
+    try:
+        # read bam file
+        bam = pysam.AlignmentFile(sys.argv[1], "rb")
+    except FileNotFoundError:
+        print("Did not found the alignment file")
+        quit()
 
-    # read bam file
-    bam = pysam.AlignmentFile(sys.argv[1], "rb")
     # get reference sequence
     reference_file = sys.argv[2]
     reference_sequence = parse_reference(reference_file)
@@ -76,9 +80,6 @@ def variant():
         aligned_pairs = alignedSeg.get_aligned_pairs()
         # quals: read sequence base qualities, including soft-clipped bases
         quals = alignedSeg.query_qualities
-        ##Testing
-        #  qual_t = alignedSeg.qual
-        #  mqual_t = alignedSeg.mapping_quality
 
         # as long as ref_pos and query_pos not reach the ends
         while ref_pos < reference_end and query_pos < query_alignment_end:
@@ -99,22 +100,12 @@ def variant():
                     b = ''
 
                     # collect all bases when reference is None
-                    while aligned_pairs[pos][1] is None:
+                    while aligned_pairs[pos][1] is None and query_pos < query_alignment_end:
                         b = b + query_sequence[query_pos]
                         pos += 1
                         query_pos += 1
 
                     b = '+' + b
-
-                    if ref_pos == test_arr_1[0]:
-                        test_arr_1[1].append(b)
-                        test_arr_1[2].append(-1)
-                    if ref_pos == test_arr_2[0]:
-                        test_arr_2[1].append(b)
-                        test_arr_2[2].append(-1)
-                    if ref_pos == test_arr_3[0]:
-                        test_arr_3[1].append(b)
-                        test_arr_3[2].append(-1)
 
                     # put [insertion pattern, num of this insertion happened, sum(qualities), number of reverse]
                     # into bucket_array[ref_pos].insertN
@@ -156,22 +147,12 @@ def variant():
                     b = ''
 
                     # same with before
-                    while aligned_pairs[pos][0] is None:
+                    while aligned_pairs[pos][0] is None and ref_pos < reference_end:
                         b = b + reference_sequence[ref_pos]
                         pos += 1
                         ref_pos += 1
 
                     b = '-' + b
-
-                    if ref_pos == test_arr_1[0]:
-                        test_arr_1[1].append(b)
-                        test_arr_1[2].append(-1)
-                    if ref_pos == test_arr_2[0]:
-                        test_arr_2[1].append(b)
-                        test_arr_2[2].append(-1)
-                    if ref_pos == test_arr_3[0]:
-                        test_arr_3[1].append(b)
-                        test_arr_3[2].append(-1)
 
                     exist = False
                     for subarr in buckets_array[ref_pos_save].deleteN:
@@ -200,16 +181,6 @@ def variant():
             # if the base quality is less than the min_qual, skip it
             if quals[query_pos] < min_qual:
 
-                if ref_pos == test_arr_1[0]:
-                    test_arr_1[1].append(query_sequence[query_pos])
-                    test_arr_1[2].append(quals[query_pos])
-                if ref_pos == test_arr_2[0]:
-                    test_arr_2[1].append(query_sequence[query_pos])
-                    test_arr_2[2].append(quals[query_pos])
-                if ref_pos == test_arr_3[0]:
-                    test_arr_3[1].append(query_sequence[query_pos])
-                    test_arr_3[2].append(quals[query_pos])
-
                 buckets_array[ref_pos].total_depth += 1
                 pos += 1
                 query_pos += 1
@@ -220,16 +191,6 @@ def variant():
             else:
                 buckets_array[ref_pos].total_depth += 1
                 query = query_sequence[query_pos]
-
-                if ref_pos == test_arr_1[0]:
-                    test_arr_1[1].append(query)
-                    test_arr_1[2].append(quals[query_pos])
-                if ref_pos == test_arr_2[0]:
-                    test_arr_2[1].append(query)
-                    test_arr_2[2].append(quals[query_pos])
-                if ref_pos == test_arr_3[0]:
-                    test_arr_3[1].append(query)
-                    test_arr_3[2].append(quals[query_pos])
 
                 # each bucket has A,G,C,T array, which is
                 # [total number of this base(A+a), total number of reverse of this base(a), total quality score added]
@@ -263,11 +224,6 @@ def variant():
                 pos += 1
                 query_pos += 1
                 ref_pos += 1
-
-    ##Testing
-    print(test_arr_1)
-    print(test_arr_2)
-    print(test_arr_3)
 
     # write to output file
     outf = open(sys.argv[3], 'w')
@@ -316,6 +272,7 @@ def variant():
 
         mdepth = b.total_depth
 
+        #every subarr inside b.insertN/deleteN, print any insertion/deletion sequence that exceed min_threshold
         for subarr in b.insertN:
             freq_depth_temp = float(subarr[1]) / mdepth
             if freq_depth_temp >= min_threshold:
