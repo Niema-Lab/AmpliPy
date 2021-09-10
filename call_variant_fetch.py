@@ -1,6 +1,7 @@
 import pysam
 import sys
 import numpy as np
+import getopt
 #import pdb
 # 'Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename'
 
@@ -36,18 +37,34 @@ def parse_reference(ref_file):
 
 
 def variant():
-    if not len(sys.argv) == 4:
-        print('Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename')
+
+    try:
+        optlist, args = getopt.getopt(sys.argv[1:], 'q:t:m:')
+    except getopt.GetoptError as err:
+        print('Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename '
+              '[-q minimal quality score to count base (Default:20)] '
+              '[-t minimal frequency threshold to call variant (Default:0.03)] '
+              '[-m minimal number of reads to call variant (Default:0)] ')
+        print(err)  # will print something like "option -a not recognized"
+        sys.exit(2)
+
+    if len(args) < 3:
+        print('You should include AlignmentFile, ReferenceFile, and VariantOutputFilename')
+        print('Usage: python3 call_variant_fetch.py AlignmentFile ReferenceFile VariantOutputFilename '
+              '[-q minimal quality score to count base (Default:20)] '
+              '[-t minimal frequency threshold to call variant (Default:0.03)] '
+              '[-m minimal number of reads to call variant (Default:0)] ')
+        quit()
 
     try:
         # read bam file
-        bam = pysam.AlignmentFile(sys.argv[1], "rb")
+        bam = pysam.AlignmentFile(args[0], "rb")
     except FileNotFoundError:
         print("Did not found the alignment file")
         quit()
 
     # get reference sequence
-    reference_file = sys.argv[2]
+    reference_file = args[1]
     reference_sequence = parse_reference(reference_file)
     # decide min base quality
     min_qual = 20;
@@ -55,6 +72,19 @@ def variant():
     min_depth = 0
     # decide min threshold for (number of base/number of reads)
     min_threshold = 0.03
+
+    ##if the user decide not to use the default value, change the parameter according to the command line input options
+    try:
+        for op, val in optlist:
+            if op == '-q':
+                min_qual = int(val)
+            elif op == '-t':
+                min_threshold = float(val)
+            elif op == '-m':
+                min_depth = int(val)
+    except ValueError:
+        print("please give valid inputs for options -q (int) -t (float) -m (int)")
+        quit()
 
     buckets_array = []
     for i in range(len(reference_sequence)):
@@ -129,8 +159,8 @@ def variant():
                             subarr.append(0)
                         buckets_array[ref_pos].insertN.append(subarr)
 
+                    # query_pos already ready, no need to change. advance ref_pos by 1
                     ref_pos += 1
-
                     continue
 
                 ##deletion
@@ -174,8 +204,8 @@ def variant():
                             subarr.append(0)
                         buckets_array[ref_pos_save].deleteN.append(subarr)
 
+                    # ref_pos already ready, no need to change. advance query_pos by 1
                     query_pos += 1
-
                     continue
 
             # if the base quality is less than the min_qual, skip it
@@ -226,7 +256,7 @@ def variant():
                 ref_pos += 1
 
     # write to output file
-    outf = open(sys.argv[3], 'w')
+    outf = open(args[2], 'w')
     outf.write(
         "REGION\tPOS\tREF\tALT\tREF_DP\tREF_RV\tREF_QUAL\tALT_DP\tALT_RV\tALT_QUAL\tALT_FREQ\tTOTAL_DP\tPVAL\tPASS\tGFF_FEATURE\tREF_CODON\tREF_AA\tALT_CODON\tALT_AA\n")
     region = bam.references[0]
@@ -292,24 +322,28 @@ def variant():
             #outf.write(str(region) + '\t' + str(ref_pos) + '\t' + '.' + '\t' + ref + '\t' + 'A' + '\t' +  str(int(b.A[2]/b.A[0])) + '\n')
             outf.write(
                 str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'A' + '\t' + str(matchN[0]) + '\t' + str(
-                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.A[0]) + '\t' + str(b.A[1]) + '\t' + str(
+                    matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.A[0]) + '\t' + str(b.A[1]) + '\t' + str(
                     int(b.A[2] / b.A[0])) + '\t' + str(round(A_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
         if ref != 'C' and C_freq_depth_0 >= min_threshold:
             outf.write(
                 str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'C' + '\t' + str(matchN[0]) + '\t' + str(
-                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.C[0]) + '\t' + str(b.C[1]) + '\t' + str(
+                    matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.C[0]) + '\t' + str(b.C[1]) + '\t' + str(
                     int(b.C[2] / b.C[0])) + '\t' + str(round(C_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
         if ref != 'G' and G_freq_depth_0 >= min_threshold:
             outf.write(
                 str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'G' + '\t' + str(matchN[0]) + '\t' + str(
-                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.G[0]) + '\t' + str(b.G[1]) + '\t' + str(
+                    matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.G[0]) + '\t' + str(b.G[1]) + '\t' + str(
                     int(b.G[2] / b.G[0])) + '\t' + str(round(G_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
         if ref != 'T' and T_freq_depth_0 >= min_threshold:
             outf.write(
                 str(region) + '\t' + str(ref_pos + 1) + '\t' + ref + '\t' + 'T' + '\t' + str(matchN[0]) + '\t' + str(
-                    b.matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.T[0]) + '\t' + str(b.T[1]) + '\t' + str(
+                    matchN[1]) + '\t' + str(ref_mean_qual) + '\t' + str(b.T[0]) + '\t' + str(b.T[1]) + '\t' + str(
                     int(b.T[2] / b.T[0])) + '\t' + str(round(T_freq_depth_0, 6)) + '\t' + str(pdepth) + '\n')
 
 
 
+import time
+
+start_time = time.time()
 variant()
+print("--- %s seconds ---" % (time.time() - start_time))
