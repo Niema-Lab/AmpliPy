@@ -1,6 +1,7 @@
 import pysam
 import sys
 import numpy as np
+import os, psutil
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -14,9 +15,11 @@ BAM_CEQUAL = 7
 BAM_CDIFF = 8
 BAM_CBACK = 9
 
+MIN_READ_LENGTH = 30
+
 # File opening and handling, currently hard coded for ease of development
-bam = pysam.AlignmentFile("Mapped1.bam", "rb")
-output = pysam.AlignmentFile("Trimmed1.sam", "w", header=bam.header)
+bam = pysam.AlignmentFile("Trimmed_Primer_Only.sam", "r")
+output = pysam.AlignmentFile("Trimmed_Both.sam", "w", header=bam.header)
 primerFile = open("/home/josh/ivar-examples/primers/swift/sarscov2_v2_primers.bed")
 
 # Information about cigar operations
@@ -74,6 +77,14 @@ def getPosOnQuery(cigar, pos, seg_start):
 	# We ran out of operations, so it must be here (or outside our query)
 	return queryPos
 
+def cigarToRefLen(cigar):
+	len = 0
+	for operation in cigar:
+		if consumeReference[operation[0]]:
+			len += operation[1]
+	
+	return len
+
 # Convert a position on the read to a position on the reference
 def getPosOnReference(cigar, pos, ref_start):
 	curPos = 0
@@ -96,61 +107,135 @@ def getPosOnReference(cigar, pos, ref_start):
 
 QUALITY_THRESHOLD = 20
 SLIDING_WINDOW = 4
-
+itr = 0
 # Iterating through the reads
 reads = []
 for r in bam:
+	# itr = itr + 1
+	# print(itr)
+	# print(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
 	# If we don't have a CIGAR, we should just skip.
 	if r.cigartuples == None:
 		continue
 
-	print(r.cigarstring)
-
+	# # print(r.query_name)
+	# # print(r.cigarstring)
+	# print(r)
 	if r.is_reverse:
-		print("REVERSE")
+		# print("REVERSE")
+		sum = 0
+		# print(1)
+		# print(r)
+		# print(r.query_alignment_qualities)
+		qual = r.query_alignment_qualities
+		# print(2)
+		window = SLIDING_WINDOW if SLIDING_WINDOW <= len(qual) else len(qual)
+		# print(len(qual))
+		truestart = 0
+		trueend = len(qual)
+
+		# # print(truestart)
+		i = trueend - 1
+		for _ in range(0, window):
+			sum += qual[i]
+			i -= 1
+		
+		# print(sum/window)
+		if (sum / window >= QUALITY_THRESHOLD):
+			while (i >= truestart):
+				sum -= qual[i + window]
+				sum += qual[i]
+				i -= 1
+				# print(i, i+window, ":", sum, sum/window)
+				if (sum / window < QUALITY_THRESHOLD):
+					break
+		
+		i += 4 + 1
+		# print(i)
+		# print(qual[49:53])
+
+		newcigar = []
+		del_len = trueend - i
+		start_pos = getPosOnReference(r.cigartuples, del_len + r.qstart, r.reference_start)
+		# print(del_len)
+
+		if start_pos > r.reference_start:
+			# # print("Need to delete", del_len)
+
+			for operation in r.cigartuples:
+				if (del_len == 0):
+					newcigar.append(operation)
+					continue
+				
+				cig = operation[0]
+				n = operation[1]
+
+				if consumeQuery[cig]:
+					if del_len >= n:
+						newcigar.append((BAM_CSOFT_CLIP, n))
+					elif del_len < n:
+						newcigar.append((BAM_CSOFT_CLIP, del_len))
+					
+					temp = n
+					n = max(n - del_len, 0)
+					del_len = max(del_len - temp, 0)
+
+					if n > 0:
+						newcigar.append((cig, n))
+			
+			# Update our cigar string, since that's what will be written
+			cigarstr = ""
+			toremove = []
+			for i in range(0, len(newcigar)):
+				if i < len(newcigar)-1 and newcigar[i][0] == newcigar[i+1][0]:
+					newcigar[i+1] = (newcigar[i+1][0], newcigar[i][1] + newcigar[i+1][1])
+					toremove.append(i)
+					continue
+				
+				cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+
+			for i in reversed(toremove):
+				newcigar.pop(i)
+
+			r.cigarstring = cigarstr
+			r.cigartuples = newcigar
+
+			# Move our position on the reference forward, if needed
+			r.reference_start = start_pos
 	else:
 		sum = 0
-		window = SLIDING_WINDOW if SLIDING_WINDOW <= r.infer_query_length() else r.infer_query_length()
 		qual = r.query_alignment_qualities
-		print(qual)
+		window = SLIDING_WINDOW if SLIDING_WINDOW <= len(qual) else len(qual)
+		# # print(window)
+		# # print(len(qual), qual)
 
 		# Figure out where we should start and end in our quality array, since it includes clips
 		truestart = 0
-		trueend = len(qual)
-		foundstart = False
-		for operation in r.cigartuples:
-			if operation[0] == BAM_CHARD_CLIP:
-				continue
-			if operation[0] != BAM_CSOFT_CLIP:
-				foundstart = True
-			if not foundstart:
-				truestart += operation[1]
-			elif operation[0] == BAM_CSOFT_CLIP:
-				trueend -= operation[1]
-				
+		trueend = len(qual)	
 
-		print(truestart)
+		# # print(truestart)
 		i = truestart
 
 		for _ in range(truestart, truestart+window):
 			sum += qual[i]
 			i += 1
-		print("First sum", sum)
+		# # print("First sum", sum)
 		
+		# print(sum/window)
 		if (sum / window >= QUALITY_THRESHOLD):
 			while (i < trueend):
 				sum -= qual[i - window]
 				sum += qual[i]
 				i += 1
+				# print(sum/window)
 				if (sum / window < QUALITY_THRESHOLD):
 					break
 
-		print(i, trueend)
+		# # print(i, trueend)
 		newcigar = []
 		del_len = trueend - i
 		start_pos = getPosOnReference(r.cigartuples, del_len, r.reference_start)
-
-		print("Need to delete", del_len)
+		# print("Need to delete", del_len)
 
 		for operation in reversed(r.cigartuples):
 			if (del_len == 0):
@@ -175,12 +260,17 @@ for r in bam:
 		
 		# Update our cigar string, since that's what will be written
 		cigarstr = ""
-
+		propercigar = []
 		for i in reversed(range(0, len(newcigar))):
-			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+			if i > 0 and newcigar[i][0] == newcigar[i-1][0]:
+				newcigar[i-1] = (newcigar[i-1][0], newcigar[i][1] + newcigar[i-1][1])
+				continue
 
-		r.cigartuples = newcigar
+			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+			propercigar.append(newcigar[i])
+
 		r.cigarstring = cigarstr
+		r.cigartuples = propercigar
 
 		# Move our position on the reference forward, if needed
 		r.reference_start = start_pos
@@ -190,4 +280,8 @@ for r in bam:
 
 # Write our reads
 for r in reads:
-	output.write(r)
+	if cigarToRefLen(r.cigartuples) >= MIN_READ_LENGTH:
+		# print("not", r)
+		output.write(r)
+	else:
+		print("removed", r)
