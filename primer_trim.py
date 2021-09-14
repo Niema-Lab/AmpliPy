@@ -14,8 +14,10 @@ BAM_CEQUAL = 7
 BAM_CDIFF = 8
 BAM_CBACK = 9
 
+MIN_READ_LENGTH = 30
+
 # File opening and handling, currently hard coded for ease of development
-bam = pysam.AlignmentFile("Mapped.bam", "rb")
+bam = pysam.AlignmentFile("Mapped_Error.sam", "r")
 output = pysam.AlignmentFile("Trimmed_Primer_Only.sam", "w", header=bam.header)
 primerFile = open("/home/josh/ivar-examples/primers/swift/sarscov2_v2_primers.bed")
 
@@ -73,178 +75,172 @@ def getPosOnQuery(cigar, pos, seg_start):
 		
 	# We ran out of operations, so it must be here (or outside our query)
 	return queryPos
-# Iterating through the reads
+
+def cigarToRefLen(cigar):
+	len = 0
+	for operation in cigar:
+		if consumeReference[operation[0]]:
+			len += operation[1]
+	
+	return len
+
 reads = []
 for r in bam:
-	# If we don't have a CIGAR, we should just skip.
-	if r.cigartuples == None:
-		continue
+	overlapping_start = getOverlappingPrimers(r.reference_start)
+	overlapping_end = getOverlappingPrimers(r.reference_end - 1)
 
-	# If we have a reverse read, we need to go backwards
-	if (r.is_reverse):
-		# Check what is overlapping from the start of the reverse (the end of the read)
-		overlapping = getOverlappingPrimers(r.reference_end - 1)
+	if len(overlapping_start) > 0:
+		overlap_end = 0
+		for primer in overlapping_start:
+			if primer[1] > overlap_end:
+				overlap_end = primer[1]
+		max_delete_start = getPosOnQuery(r.cigartuples, overlap_end, r.reference_start)
+		max_delete_start = max(max_delete_start, 0)
 
-		# If nothing overlaps, we don't need to continue trimming
-		if len(overlapping) > 0:
-			# Find the minimum, or the largest we'd need to trim
-			overlap_start = float("inf")
-			for primer in overlapping:
-				if primer[0] < overlap_start:
-					overlap_start = primer[0]
+		# Initializations
+		newcigar = []
+		ref_add = 0
+		delLen = max_delete_start
+		pos_start = False
+		start_pos = 0
+		# print(delLen)
+
+		# For each operation in our Cigar
+		for operation in r.cigartuples:
+			# If we have nothing left to delete, just append everything
+			if (delLen == 0 and pos_start):
+				newcigar.append(operation)
+				continue
 			
-			# Determine how much we need to delete
-			maxDeleteLen = r.infer_query_length() - getPosOnQuery(r.cigartuples, overlap_start, r.reference_start)
-			maxDeleteLen = maxDeleteLen if maxDeleteLen > 0 else 0
+			# For convenience, this is the data about our current cigar operation
+			cig = operation[0]
+			n = operation[1]
 
-			# Initializations
-			newcigar = []
-			ref_add = 0
-			delLen = maxDeleteLen
-			pos_start = False
-
-			# For each operation in our Cigar
-			for operation in reversed(r.cigartuples):
-				# If we have nothing left to delete, just append everything
-				if (delLen == 0 and pos_start):
-					newcigar.append(operation)
-					continue
-				
-				# For convenience, this is the data about our current cigar operation
-				cig = operation[0]
-				n = operation[1]
-
-				# If we have nothing left to delete and are consuming both, we want to just append everything
-				if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
-					pos_start = True
-					newcigar.append(operation) # Remember we need to include this one!
-					continue
-				
-				# If our operation consumes the query
-				if consumeQuery[cig]:
-					# How much do we have to delete?
-					if delLen >= n:
-						# Our entire operation needs to be deleted
-						newcigar.append((BAM_CSOFT_CLIP, n))
-					elif delLen < n and delLen > 0:
-						# We need to delete some of our segment, but we will still have more later
-						newcigar.append((BAM_CSOFT_CLIP, delLen))
-					elif delLen == 0:
-						# Since we consume the query, we just need to keep clipping
-						newcigar.append((BAM_CSOFT_CLIP, n))
-						continue
-					
-					# Update based on how much we just deleted
-					temp = n
-					n = max(n - delLen, 0)
-					delLen = max(delLen - temp, 0)
-
-					# If there is still more left to do, append it
-					if n > 0:
-						newcigar.append((cig, n))
-
-					# If we are done and just consumed, we want to just start appending everything.
-					if delLen == 0 and consumeQuery[newcigar[-1][0]] and consumeReference[newcigar[-1][0]]:
-						pos_start = True
-
-			# Update our cigar string, since that's what will be written
-			cigarstr = ""
-
-			for i in reversed(range(0, len(newcigar))):
-				cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+			# If we have nothing left to delete and are consuming both, we want to just append everything
+			if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
+				pos_start = True
+				newcigar.append(operation) # Remember we need to include this one!
+				continue
 			
-			r.cigartuples = newcigar
-			r.cigarstring = cigarstr
-	else: # We are a forward read, so we want to continue forwards
-		# Check what is overlapping from the start of the reverse (the end of the read)
-		overlapping = getOverlappingPrimers(r.reference_start)
-
-		# If nothing overlaps, we don't need to continue trimming
-		if len(overlapping) > 0:
-			# Find the maximum, or the largest we'd need to trim
-			overlap_end = 0
-			for primer in overlapping:
-				if primer[1] > overlap_end:
-					overlap_end = primer[1]
-
-			# Determine how much we need to delete
-			maxDeleteLen = getPosOnQuery(r.cigartuples, overlap_end, r.reference_start)
-			maxDeleteLen = maxDeleteLen if maxDeleteLen > 0 else 0
-
-			# Initializations
-			newcigar = []
+			# How much our current trim affects our read's start position
 			ref_add = 0
-			delLen = maxDeleteLen
-			pos_start = False
-			start_pos = 0
 
-			# For each operation in our Cigar
-			for operation in r.cigartuples:
-				# If we have nothing left to delete, just append everything
-				if (delLen == 0 and pos_start):
-					newcigar.append(operation)
+			# If our operation consumes the query
+			if consumeQuery[cig]:
+				# How much do we have to delete?
+				if delLen >= n:
+					# Our entire operation needs to be deleted
+					newcigar.append((BAM_CSOFT_CLIP, n))
+				elif delLen < n and delLen > 0:
+					# We need to delete some of our segment, but we will still have more later
+					newcigar.append((BAM_CSOFT_CLIP, delLen))
+				elif delLen == 0:
+					# Since we consume the query, we just need to keep clipping
+					newcigar.append((BAM_CSOFT_CLIP, n))
 					continue
 				
-				# For convenience, this is the data about our current cigar operation
-				cig = operation[0]
-				n = operation[1]
+				# Update based on how much we just deleted
+				ref_add = min(delLen, n)
+				temp = n
+				n = max(n - delLen, 0)
+				delLen = max(delLen - temp, 0)
 
-				# If we have nothing left to delete and are consuming both, we want to just append everything
-				if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
+				# If there is still more left to do, append it
+				if n > 0:
+					newcigar.append((cig, n))
+
+				# If we are done and just consumed, we want to just start appending everything.
+				if delLen == 0 and consumeQuery[newcigar[-1][0]] and consumeReference[newcigar[-1][0]]:
 					pos_start = True
-					newcigar.append(operation) # Remember we need to include this one!
+			
+			# If our trim consumed the reference, we need to move our read's start position forwards
+			if consumeReference[cig]:
+				start_pos += ref_add
+
+		# Update our cigar string, since that's what will be written
+		cigarstr = ""
+
+		for i in range(0, len(newcigar)):
+			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+
+		r.cigartuples = newcigar
+		r.cigarstring = cigarstr
+
+		# Move our position on the reference forward, if needed
+		r.reference_start += start_pos
+	
+	if len(overlapping_end) > 0:
+		overlap_start = float("inf")
+		for primer in overlapping_end:
+			if primer[0] < overlap_start:
+				overlap_start = primer[0]
+		max_delete_end = r.infer_query_length() - getPosOnQuery(r.cigartuples, overlap_start, r.reference_start)
+		max_delete_end = max(max_delete_end, 0)
+
+		# Initializations
+		newcigar = []
+		ref_add = 0
+		delLen = max_delete_end
+		pos_start = False
+
+		# For each operation in our Cigar
+		for operation in reversed(r.cigartuples):
+			# If we have nothing left to delete, just append everything
+			if (delLen == 0 and pos_start):
+				newcigar.append(operation)
+				continue
+			
+			# For convenience, this is the data about our current cigar operation
+			cig = operation[0]
+			n = operation[1]
+
+			# If we have nothing left to delete and are consuming both, we want to just append everything
+			if (delLen == 0 and consumeQuery[cig] and consumeReference[cig]):
+				pos_start = True
+				newcigar.append(operation) # Remember we need to include this one!
+				continue
+			
+			# If our operation consumes the query
+			if consumeQuery[cig]:
+				# How much do we have to delete?
+				if delLen >= n:
+					# Our entire operation needs to be deleted
+					newcigar.append((BAM_CSOFT_CLIP, n))
+				elif delLen < n and delLen > 0:
+					# We need to delete some of our segment, but we will still have more later
+					newcigar.append((BAM_CSOFT_CLIP, delLen))
+				elif delLen == 0:
+					# Since we consume the query, we just need to keep clipping
+					newcigar.append((BAM_CSOFT_CLIP, n))
 					continue
 				
-				# How much our current trim affects our read's start position
-				ref_add = 0
+				# Update based on how much we just deleted
+				temp = n
+				n = max(n - delLen, 0)
+				delLen = max(delLen - temp, 0)
 
-				# If our operation consumes the query
-				if consumeQuery[cig]:
-					# How much do we have to delete?
-					if delLen >= n:
-						# Our entire operation needs to be deleted
-						newcigar.append((BAM_CSOFT_CLIP, n))
-					elif delLen < n and delLen > 0:
-						# We need to delete some of our segment, but we will still have more later
-						newcigar.append((BAM_CSOFT_CLIP, delLen))
-					elif delLen == 0:
-						# Since we consume the query, we just need to keep clipping
-						newcigar.append((BAM_CSOFT_CLIP, n))
-						continue
-					
-					# Update based on how much we just deleted
-					ref_add = min(delLen, n)
-					temp = n
-					n = max(n - delLen, 0)
-					delLen = max(delLen - temp, 0)
+				# If there is still more left to do, append it
+				if n > 0:
+					newcigar.append((cig, n))
 
-					# If there is still more left to do, append it
-					if n > 0:
-						newcigar.append((cig, n))
+				# If we are done and just consumed, we want to just start appending everything.
+				if delLen == 0 and consumeQuery[newcigar[-1][0]] and consumeReference[newcigar[-1][0]]:
+					pos_start = True
 
-					# If we are done and just consumed, we want to just start appending everything.
-					if delLen == 0 and consumeQuery[newcigar[-1][0]] and consumeReference[newcigar[-1][0]]:
-						pos_start = True
-				
-				# If our trim consumed the reference, we need to move our read's start position forwards
-				if consumeReference[cig]:
-					start_pos += ref_add
+		# Update our cigar string, since that's what will be written
+		cigarstr = ""
 
-			# Update our cigar string, since that's what will be written
-			cigarstr = ""
-
-			for i in range(0, len(newcigar)):
-				cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
-
-			r.cigartuples = newcigar
-			r.cigarstring = cigarstr
-
-			# Move our position on the reference forward, if needed
-			r.reference_start += start_pos
-
-	# Append the trimmed read
+		for i in reversed(range(0, len(newcigar))):
+			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+		
+		r.cigartuples = newcigar
+		r.cigarstring = cigarstr
+	
 	reads.append(r)
 
 # Write our reads
 for r in reads:
-	output.write(r)
+	if cigarToRefLen(r.cigartuples) >= MIN_READ_LENGTH:
+		output.write(r)
+	else:
+		print("removed", r)
