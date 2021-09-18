@@ -26,12 +26,20 @@ cigarMap = ["M", "I", "D", "N", "S", "H", "P", "=", "X"]
 consumeQuery = [True, True, False, False, True, False, False, True, True]
 consumeReference = [True, False, True, True, False, False, False, True, True]
 
+max_primer_len = 0
+
 # Build our primer list
 primers = []
 for primer in primerFile:
 	data = primer.split()
+	start = int(data[1])
+	# End isn't 0 based in bed
+	end = int(data[2]) - 1
 
-	primers.append((int(data[1]), int(data[2])))
+	primers.append((start, end))
+	# Determine the longest primer
+	if end - start + 1 > max_primer_len:
+		max_primer_len = end - start + 1
 
 # Sort primers, this may help with optimizations later?
 # primers.sort(key=lambda e : int(e[1]))
@@ -84,17 +92,29 @@ def cigarToRefLen(cigar):
 	
 	return len
 
+def cigarToQLen(cigar):
+	len = 0
+	for operation in cigar:
+		if consumeQuery[operation[0]]:
+			len += operation[1]
+	
+	return len
+
 reads = []
 for r in bam:
 	overlapping_start = getOverlappingPrimers(r.reference_start)
 	overlapping_end = getOverlappingPrimers(r.reference_end - 1)
 
-	if len(overlapping_start) > 0:
+	isize_flag = abs(r.template_length) - max_primer_len > abs(cigarToQLen(r.cigartuples))
+
+	ref_start_offset = 0
+
+	if not (r.is_paired and isize_flag and r.is_reverse) and len(overlapping_start) > 0:
 		overlap_end = 0
 		for primer in overlapping_start:
 			if primer[1] > overlap_end:
 				overlap_end = primer[1]
-		max_delete_start = getPosOnQuery(r.cigartuples, overlap_end, r.reference_start)
+		max_delete_start = getPosOnQuery(r.cigartuples, overlap_end + 1, r.reference_start)
 		max_delete_start = max(max_delete_start, 0)
 
 		# Initializations
@@ -103,7 +123,6 @@ for r in bam:
 		delLen = max_delete_start
 		pos_start = False
 		start_pos = 0
-		# print(delLen)
 
 		# For each operation in our Cigar
 		for operation in r.cigartuples:
@@ -159,23 +178,28 @@ for r in bam:
 
 		# Update our cigar string, since that's what will be written
 		cigarstr = ""
-
+		propercigar = []
 		for i in range(0, len(newcigar)):
+			if i < len(newcigar)-1 and newcigar[i][0] == newcigar[i+1][0]:
+				newcigar[i+1] = (newcigar[i+1][0], newcigar[i][1] + newcigar[i+1][1])
+				continue
+			
 			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
+			propercigar.append(newcigar[i])
 
-		r.cigartuples = newcigar
 		r.cigarstring = cigarstr
+		r.cigartuples = propercigar
 
 		# Move our position on the reference forward, if needed
 		r.reference_start += start_pos
-	
-	if len(overlapping_end) > 0:
+		ref_start_offset += start_pos
+
+	if not (r.is_paired and isize_flag and not r.is_reverse) and len(overlapping_end) > 0:
 		overlap_start = float("inf")
 		for primer in overlapping_end:
 			if primer[0] < overlap_start:
 				overlap_start = primer[0]
-		max_delete_end = r.infer_query_length() - getPosOnQuery(r.cigartuples, overlap_start, r.reference_start)
-		max_delete_end = max(max_delete_end, 0)
+		max_delete_end = cigarToQLen(r.cigartuples) - getPosOnQuery(r.cigartuples, overlap_start, r.reference_start)
 
 		# Initializations
 		newcigar = []
@@ -229,18 +253,24 @@ for r in bam:
 
 		# Update our cigar string, since that's what will be written
 		cigarstr = ""
-
+		propercigar = []
 		for i in reversed(range(0, len(newcigar))):
+			if i > 0 and newcigar[i][0] == newcigar[i-1][0]:
+				newcigar[i-1] = (newcigar[i-1][0], newcigar[i][1] + newcigar[i-1][1])
+				continue
+
 			cigarstr = cigarstr + str(newcigar[i][1]) + cigarMap[newcigar[i][0]]
-		
-		r.cigartuples = newcigar
+			propercigar.append(newcigar[i])
+
 		r.cigarstring = cigarstr
+		r.cigartuples = propercigar
 	
 	reads.append(r)
 
 # Write our reads
 for r in reads:
 	if cigarToRefLen(r.cigartuples) >= MIN_READ_LENGTH:
+		# print(r)
 		output.write(r)
-	else:
-		print("removed", r)
+	# else:
+		# print("removed", r)
