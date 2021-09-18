@@ -118,16 +118,12 @@ for r in bam:
 	if r.cigartuples == None:
 		continue
 
-	# # print(r.query_name)
-	# # print(r.cigarstring)
 	if r.is_reverse:
 		sum = 0
 		qual = r.query_alignment_qualities
 		window = SLIDING_WINDOW if SLIDING_WINDOW <= len(qual) else len(qual)
-		# print(len(qual))
 		truestart = 0
 		trueend = len(qual)
-		# # print(truestart)
 
 		i = trueend
 		for offset in range(1, window):
@@ -138,13 +134,13 @@ for r in bam:
 				window -= 1
 			else:
 				sum += qual[i - window]
-			
+
 			if sum / window < QUALITY_THRESHOLD:
 				break
 						
 			sum -= qual[i - 1]
 			i -= 1
-			
+
 		newcigar = []
 		del_len = i
 		start_pos = getPosOnReference(r.cigartuples, del_len + r.qstart, r.reference_start)

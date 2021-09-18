@@ -17,7 +17,7 @@ BAM_CBACK = 9
 MIN_READ_LENGTH = 30
 
 # File opening and handling, currently hard coded for ease of development
-bam = pysam.AlignmentFile("Mapped_Error.sam", "r")
+bam = pysam.AlignmentFile("Mapped.bam", "r")
 output = pysam.AlignmentFile("Trimmed_Primer_Only.sam", "w", header=bam.header)
 primerFile = open("/home/josh/ivar-examples/primers/swift/sarscov2_v2_primers.bed")
 
