@@ -1,7 +1,6 @@
 import pysam
 import sys
 import numpy as np
-import os, psutil
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -113,7 +112,6 @@ reads = []
 for r in bam:
 	# itr = itr + 1
 	# print(itr)
-	# print(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
 	# If we don't have a CIGAR, we should just skip.
 	if r.cigartuples == None:
 		continue
