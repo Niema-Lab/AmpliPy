@@ -96,7 +96,10 @@ consumeReference = [True, False, True, True, False, False, False, True, True]
 
 def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, sliding_window=4, include_no_primer=False):
 	##### Initialize Counters #####
-	# Nothing yet
+	removed_reads = 0
+	primer_trimmed_count = 0
+	no_primer_count = 0
+	quality_trimmed_count = 0
 
 	##### Build our primer list #####
 	max_primer_len = 0
@@ -114,6 +117,10 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 	
 	##### Iterate Through Reads #####
 	for r in bam:
+		# Info for stats
+		primer_trimmed = False
+		quality_trimmed = False
+
 		##### Primer Trim #####
 		overlapping_start = getOverlappingPrimers(r.reference_start, primers)
 		overlapping_end = getOverlappingPrimers(r.reference_end - 1, primers)
@@ -123,6 +130,8 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		ref_start_offset = 0
 
 		if not (r.is_paired and isize_flag and r.is_reverse) and len(overlapping_start) > 0:
+			primer_trimmed = True
+			# Determine greatest overlap
 			overlap_end = 0
 			for primer in overlapping_start:
 				if primer[1] > overlap_end:
@@ -208,6 +217,8 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 			ref_start_offset += start_pos
 
 		if not (r.is_paired and isize_flag and not r.is_reverse) and len(overlapping_end) > 0:
+			primer_trimmed = True
+			# Determine greatest overlap
 			overlap_start = float("inf")
 			for primer in overlapping_end:
 				if primer[0] < overlap_start:
@@ -280,36 +291,46 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		
 		##### Quality Trim #####
 		if r.is_reverse:
+			# Initializations
 			sum = 0
 			qual = r.query_alignment_qualities
 			window = sliding_window if sliding_window <= len(qual) else len(qual)
 			truestart = 0
 			trueend = len(qual)
 
+			# Build up our buffer
 			i = trueend
 			for offset in range(1, window):
 				sum += qual[i - offset]
 
+			# Loop through the read, determine when we need to trim
 			while i > truestart:
 				if truestart + window > i:
+					# We are nearing the end, so we need to shrink our window
 					window -= 1
 				else:
+					# Still have more to go, so add in our new value
 					sum += qual[i - window]
 
+				# Check our current quality score
 				if sum / window < min_qual_thresh:
 					break
 							
+				# Remove the no longer needed quality score, and advance i
 				sum -= qual[i - 1]
 				i -= 1
 
+			# Initialization for trimming
 			newcigar = []
 			del_len = i
 			start_pos = getPosOnReference(r.cigartuples, del_len + r.qstart, r.reference_start)
 
+			# Do we need to trim?
 			if start_pos > r.reference_start:
-				# # print("Need to delete", del_len)
-
+				quality_trimmed = True
+				# Iterate over cigar
 				for operation in r.cigartuples:
+					# Nothing left to trim, just append everything
 					if (del_len == 0):
 						newcigar.append(operation)
 						continue
@@ -317,20 +338,27 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 					cig = operation[0]
 					n = operation[1]
 
+					# These are just clips, so it's not part of our quality trim determination
 					if cig == BAM_CSOFT_CLIP or cig == BAM_CHARD_CLIP:
 						newcigar.append(operation)
 						continue
 
+					# We consume the query, so we may need to trim
 					if consumeQuery[cig]:
+						# How much do we need to delete?
 						if del_len >= n:
+							# All of the current operation
 							newcigar.append((BAM_CSOFT_CLIP, n))
 						elif del_len < n:
+							# Only part of the current operation
 							newcigar.append((BAM_CSOFT_CLIP, del_len))
 						
+						# Decrease our delete length by how much we've deleted
 						temp = n
 						n = max(n - del_len, 0)
 						del_len = max(del_len - temp, 0)
 
+						# If we ran out of things to delete, we need to append the rest of the operation
 						if n > 0:
 							newcigar.append((cig, n))
 				
@@ -351,37 +379,46 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 				# Move our position on the reference forward, if needed
 				r.reference_start = start_pos
 		else:
+			# Initailizations
 			sum = 0
 			qual = r.query_alignment_qualities
 			window = sliding_window if sliding_window <= len(qual) else len(qual)
-			# # print(window)
-			# # print(len(qual), qual)
-
-			# Figure out where we should start and end in our quality array, since it includes clips
 			truestart = 0
 			trueend = len(qual)	
 
+			# Build up our buffer
 			i = truestart
 			for offset in range(0, window - 1):
 				sum += qual[i + offset]
 			
+			# Loop through the read, determine when we need to trim
 			while i < trueend:
 				if trueend - window < i:
+					# We are nearing the end, so we need to shrink our window
 					window -= 1
 				else:
+					# Still have more to go, so add in our new value
 					sum += qual[i + window - 1]
 				
+				# Check our current quality score
 				if sum / window < min_qual_thresh:
 					break
 				
+				# Remove the no longer needed quality score, and advance i
 				sum -= qual[i]
 				i += 1
 			
+			# Initialization for trimming
 			newcigar = []
 			del_len = trueend - i
 			start_pos = getPosOnReference(r.cigartuples, del_len, r.reference_start)
 
+			if (del_len > 0):
+				quality_trimmed = True
+
+			# Iterate over cigar
 			for operation in reversed(r.cigartuples):
+				# Nothing left to trim, just append everything
 				if (del_len == 0):
 					newcigar.append(operation)
 					continue
@@ -389,20 +426,27 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 				cig = operation[0]
 				n = operation[1]
 
+				# These are just clips, so it's not part of our quality trim determination
 				if cig == BAM_CSOFT_CLIP or cig == BAM_CHARD_CLIP:
 					newcigar.append(operation)
 					continue
 
+				# We consume the query, so we may need to trim
 				if consumeQuery[cig]:
+					# How much do we need to delete?
 					if del_len >= n:
+						# All of the current operation
 						newcigar.append((BAM_CSOFT_CLIP, n))
 					elif del_len < n:
+						# Only part of the current operation
 						newcigar.append((BAM_CSOFT_CLIP, del_len))
 					
+					# Decrease our delete length by how much we've deleted
 					temp = n
 					n = max(n - del_len, 0)
 					del_len = max(del_len - temp, 0)
 
+					# If we ran out of things to delete, we need to append the rest of the operation
 					if n > 0:
 						newcigar.append((cig, n))
 			
@@ -423,8 +467,19 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 			# Move our position on the reference forward, if needed
 			r.reference_start = start_pos
 		
-		if cigarToRefLen(r.cigartuples) >= min_read_length:
+		if (primer_trimmed):
+			primer_trimmed_count += 1
+		else:
+			no_primer_count += 1
+		
+		if (quality_trimmed):
+			quality_trimmed_count += 1
+		
+		# Only output if we exceed the read length
+		if cigarToRefLen(r.cigartuples) >= min_read_length and (primer_trimmed or include_no_primer):
 			output.write(r)
+		else:
+			removed_reads += 1
 	
 	# Return our statstics (nothing yet)
-	return []
+	return {"removed_reads": removed_reads, "primer_trimmed_count": primer_trimmed_count, "no_primer_count": no_primer_count, "quality_trimmed_count": quality_trimmed_count}

@@ -6,7 +6,7 @@ from trim import trim
 
 ##### Argument Setup #####
 parser = argparse.ArgumentParser()
-parser.add_argument("-d", dest="debug", help="Enable debug mode for extra output", action="store_true")
+parser.add_argument("-d", dest="debug", help="Enable debug mode for extra output", action="store_true") # Currently unused
 subparsers = parser.add_subparsers(dest="dest")
 
 # Trim args
@@ -54,6 +54,12 @@ if (args.dest == "trim"):
 
 	# Call trim
 	stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh, sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
+
+	# Print stats
+	print("%i reads were primer trimmed"%stats["primer_trimmed_count"])
+	print("%i reads didn't include a primer%s"%(stats["no_primer_count"], " (but were included because -e was specified)" if args.incl_no_primer else ""))
+	print("%i reads were quality trimmed"%stats["quality_trimmed_count"])
+	print("%i reads were excluded due to being shorter than the minimum read length (%i)"%(stats["removed_reads"], args.min_read_len))
 elif (args.dest == "variant"):
 	##### Call Variant #####
 	print("Nothing here yet!")
