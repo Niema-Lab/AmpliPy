@@ -101,6 +101,7 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 	no_primer_count = 0
 	quality_trimmed_count = 0
 	no_cigar_count = 0
+	unmapped = 0
 
 	##### Build our primer list #####
 	max_primer_len = 0
@@ -118,6 +119,11 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 	
 	##### Iterate Through Reads #####
 	for r in bam:
+		# If a read is unmapped, skip it
+		if r.is_unmapped:
+			unmapped += 1
+			continue
+
 		# If we have no cigar, we cannot do anything with this read. We will not output it nor do anything with it.
 		if r.cigartuples == None:
 			no_cigar_count += 1
