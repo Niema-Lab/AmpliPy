@@ -116,7 +116,7 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		# Determine the longest primer
 		if end - start + 1 > max_primer_len:
 			max_primer_len = end - start + 1
-	
+
 	##### Iterate Through Reads #####
 	for r in bam:
 		# If a read is unmapped, skip it
@@ -492,6 +492,6 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 			output.write(r)
 		else:
 			removed_reads += 1
-	
+
 	# Return our statstics (nothing yet)
 	return {"removed_reads": removed_reads, "primer_trimmed_count": primer_trimmed_count, "no_primer_count": no_primer_count, "quality_trimmed_count": quality_trimmed_count, "no_cigar_count": no_cigar_count}
