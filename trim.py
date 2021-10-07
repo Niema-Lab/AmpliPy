@@ -1,6 +1,6 @@
 import pysam
 import sys
-import numpy as np
+import time
 import math
 
 # Constants, so we can easily see what type of operation we want
@@ -118,29 +118,28 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		if end - start + 1 > max_primer_len:
 			max_primer_len = end - start + 1
 	
-	# We only want to deal with mapped reads. So we can get an idea of what we're working with, collect only mapped reads and we can ignore everything else.
-	print("Analyzing Reads...")
-	mapped = []
-	for r in bam:
-		if not r.is_unmapped:
-			mapped.append(r)
-	
-	# We no longer need the actual bam file, so we can close it safely.
-	bam.close()
-
-	print("Found %i mapped reads"%len(mapped))
+	starttime = math.floor(time.time())
+	curtime = 0
+	print("Procesesing Reads...")
 
 	processed = 0
-	prevblock = -1
-	print("Procesesing Reads...")
 	##### Iterate Through Reads #####
-	for r in mapped:
-		processed += 1
-
-		if prevblock != math.floor(processed / len(mapped) * 50):
-			prevblock = math.floor(processed / len(mapped) * 50)
-			sys.stdout.write("\r{2}% [{0}{1}]".format("="*prevblock, " "*(50-prevblock), prevblock*2))
+	for r in bam:
+		if curtime != math.floor(time.time()):
+			curtime = math.floor(time.time())
+			sys.stdout.write("\r{0} Processed {1} mapped reads, Elapsed Time: {2}:{3}".format(
+				["|", "/", "-", "\\"][curtime % 4],
+				processed,
+				math.floor((curtime-starttime)/60),
+				(curtime-starttime)%60)
+			)
 			sys.stdout.flush()
+		
+		if r.is_unmapped:
+			unmapped += 1
+			continue
+
+		processed += 1
 
 		# If we have no cigar, we cannot do anything with this read. We will not output it nor do anything with it.
 		if r.cigartuples == None:
@@ -510,9 +509,7 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 			output.write(r)
 		else:
 			removed_reads += 1
-	
-	# Print a new line so our progress bar doesn't get in the way of anything
-	print()
 
+	print("\nWrapping up...")
 	# Return our statstics (nothing yet)
 	return {"removed_reads": removed_reads, "primer_trimmed_count": primer_trimmed_count, "no_primer_count": no_primer_count, "quality_trimmed_count": quality_trimmed_count, "no_cigar_count": no_cigar_count}
