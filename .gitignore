@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Dataset ignores
+tests/
+sarscov2_v2_primers.bed
+time.py
+timing.csv
