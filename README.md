@@ -1,4 +1,5 @@
 # AmpliPy
+
 Python implementation of viral trimming + variant calling, similar to iVar
 
 ## Development Process
@@ -11,4 +12,25 @@ To get feedback on your code changes, make a [draft pull request](https://github
 
 ## Dependencies
 
-- pysam `pip install pysam`
+- pysamy
+- autopep8 (development only)
+
+Install all dependencies by `pip install -r requirements.txt`
+
+## Usage
+
+    usage: python amplipy.py [-h] [-d] {trim,variant} ...
+
+    positional arguments:
+    {trim,variant}
+
+    optional arguments:
+    -h, --help      show this help message and exit
+    -d              Enable debug mode for extra output
+
+## Contributors
+
+- [Josh Cross](https://github.com/TheCrossBoy)
+- [Niya Shao](https://github.com/Doreen0Niya)
+- [Ronak Shah](https://github.com/trulyronak)
+- [Niema Moshiri](https://github.com/niemasd)
