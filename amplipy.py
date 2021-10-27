@@ -2,6 +2,7 @@ import argparse
 import pysam
 import os.path
 import sys
+from trim_multiprocess import trim as trimMulti
 from trim import trim
 
 ##### Argument Setup #####
@@ -40,7 +41,8 @@ trim_opt_args.add_argument("-s", dest="sliding_window",
                            help="Base length of sliding window", type=int, default=4)
 trim_opt_args.add_argument("-e", dest="incl_no_primer",
                            help="Include reads with no primers", action="store_true")
-
+trim_opt_args.add_argument("-x", dest="multiprocess",
+                           help="enable experimental multiprocessing support", default=False)
 # Variant args (todo)
 variant_parser = subparsers.add_parser("variant")
 
@@ -66,8 +68,12 @@ if (args.dest == "trim"):
     output = pysam.AlignmentFile(args.out_file, "w", header=bam.header)
 
     # Call trim
-    stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh,
-                 sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
+    if (args.multiprocess):
+        stats = trimMulti(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh,
+                          sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
+    else:
+        stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh,
+                     sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
 
     # Print stats
     print("%i reads were primer trimmed" % stats["primer_trimmed_count"])

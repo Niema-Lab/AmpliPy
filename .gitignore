@@ -133,3 +133,4 @@ tests/
 sarscov2_v2_primers.bed
 time.py
 timing.csv
+*.bam

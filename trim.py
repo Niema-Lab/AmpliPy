@@ -2,6 +2,7 @@ import pysam
 import sys
 import time
 import math
+from builtins import sum as addAll
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -131,9 +132,15 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
     curtime = 0
     print("Procesesing Reads...")
 
+    processing_times = []
+    writing_times = []
+
     processed = 0
+
     ##### Iterate Through Reads #####
+
     for r in bam:
+        read_start = time.time()
         if curtime != math.floor(time.time()):
             curtime = math.floor(time.time())
             sys.stdout.write("\r{0} Processed {1} mapped reads, Elapsed Time: {2}:{3}".format(
@@ -530,12 +537,27 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
         if (quality_trimmed):
             quality_trimmed_count += 1
 
+        read_process_time = time.time() - read_start
+        processing_times.append(read_process_time)
+        # print("took " + str(read_process_time) + " to process this read")
+        write_start = time.time()
         # Only output if we exceed the read length
         if cigarToRefLen(r.cigartuples) >= min_read_length and (primer_trimmed or include_no_primer):
             output.write(r)
+            write_time = time.time() - write_start
+            writing_times.append(write_time)
+            # print("took " + str(write_time) + " to write the read")
         else:
             removed_reads += 1
 
     print("\nWrapping up...")
+
+    print("Average processing time: " +
+          str(addAll(processing_times) / len(processing_times)))
+    print("Highest processing time: " + str(max(processing_times)))
+    print("Average writing time: " +
+          str(addAll(writing_times) / len(writing_times)))
+    print("Highest writing time: " + str(max(writing_times)))
+
     # Return our statstics (nothing yet)
     return {"removed_reads": removed_reads, "primer_trimmed_count": primer_trimmed_count, "no_primer_count": no_primer_count, "quality_trimmed_count": quality_trimmed_count, "no_cigar_count": no_cigar_count}
