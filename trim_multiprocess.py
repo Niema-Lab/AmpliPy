@@ -5,6 +5,7 @@ import time
 import math
 from builtins import sum as addAll
 import asyncio
+import threading
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -158,9 +159,9 @@ min_read_lengthGlobal = 0
 include_no_primerGlobal = 0
 
 
-def process_read(read):
+def process_read(read, header):
     # somehow do depickling
-    r = read  # pysam.AlignmentFile.fromstring(read)
+    r = pysam.AlignmentFile.fromstring(read, header=header)
     if r.is_unmapped:
         # unmapped += 1
         return None
@@ -562,14 +563,15 @@ def process_read(read):
     return None
 
 
-def process_distributor(queue, signal_queue):
+sem = threading.Semaphore()
+
+
+def process_distributor(queue, signal_queue, header):
     # if we have added all jobs and we have no jobs left to do, break
     while not (signal_queue.empty() and not queue.empty()):
-        # check da queue
-        # if something on da queue
-        if not queue.empty():
-            read = queue.get()
-            process_read(read)
+        sem.acquire()
+        read = queue.get()
+        process_read(read, header)
 
 
 def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, sliding_window=4, include_no_primer=False):
@@ -607,6 +609,7 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
         if end - start + 1 > max_primer_len:
             max_primer_len = end - start + 1
 
+    print("starting processing")
     start_time = math.floor(time.time())
     m = mp.Manager()
 
@@ -614,19 +617,22 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
     signal_queue = m.Queue()
 
     distributor1 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue))
+                              args=(queued_jobs, signal_queue, bam.header))
     distributor2 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue))
+                              args=(queued_jobs, signal_queue, bam.header))
     distributor3 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue))
+                              args=(queued_jobs, signal_queue, bam.header))
 
     distributor1.start()
     distributor2.start()
     distributor3.start()
-    for read in bam:
-        # pickled_read = read.to_string()
-        queued_jobs.put(read)
 
+    for read in bam:
+        pickled_read = read.to_string()
+        queued_jobs.put(pickled_read)
+        sem.release()
+
+    print("we have read everything in " + str(time.time() - start_time))
     signal_queue.put(True)  # signals to all that we're done
     distributor1.join()
     distributor2.join()

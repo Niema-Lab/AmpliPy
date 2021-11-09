@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import numpy as np
 import time
 import multiprocessing as mp
@@ -47,14 +48,15 @@ def process_read_mp(read):
     output(sum)
 
 
+sem = threading.Semaphore()
+
+
 def process_reads(queue, signal_queue):
     # if we have added all jobs and we have no jobs left to do, break
-    while not (signal_queue.empty() and not queue.empty()):
-        # check da queue
-        # if something on da queue
-        if not queue.empty():
-            read = queue.get()
-            process_read_mp(read)
+    while not (signal_queue.empty() and not queue.empty()):  # should we keep waiting?
+        sem.acquire()  # waiting
+        read = queue.get()
+        process_read_mp(read)
 
 
 def main_mp_approach(reads):
@@ -74,8 +76,10 @@ def main_mp_approach(reads):
     distributor1.start()
     distributor2.start()
     distributor3.start()
+
     for read in reads:
         queued_jobs.put(read)
+        sem.release()
 
     signal_queue.put(True)  # signals to all that we're done
     distributor1.join()
