@@ -1,9 +1,10 @@
-from multiprocessing import Process, Queue, Pool
+import multiprocessing as mp
 import pysam
 import sys
 import time
 import math
 from builtins import sum as addAll
+import asyncio
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -108,7 +109,7 @@ consumeReference = [True, False, True, True, False, False, False, True, True]
 
 class Trimmer:
     def __init__(self, bam, output):
-        queue = Queue()
+        queue = mp.Queue()
         idx = 0
         self.processes = []
 
@@ -157,8 +158,9 @@ min_read_lengthGlobal = 0
 include_no_primerGlobal = 0
 
 
-def letsTry(read):
-    r = reads[read]
+def process_read(read):
+    # somehow do depickling
+    r = read  # pysam.AlignmentFile.fromstring(read)
     if r.is_unmapped:
         # unmapped += 1
         return None
@@ -560,6 +562,16 @@ def letsTry(read):
     return None
 
 
+def process_distributor(queue, signal_queue):
+    # if we have added all jobs and we have no jobs left to do, break
+    while not (signal_queue.empty() and not queue.empty()):
+        # check da queue
+        # if something on da queue
+        if not queue.empty():
+            read = queue.get()
+            process_read(read)
+
+
 def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, sliding_window=4, include_no_primer=False):
     ##### Initialize Counters #####
     removed_reads = 0
@@ -595,15 +607,34 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
         if end - start + 1 > max_primer_len:
             max_primer_len = end - start + 1
 
-    starttime = math.floor(time.time())
-    curtime = 0
-    print("Procesesing Reads...")
+    start_time = math.floor(time.time())
+    m = mp.Manager()
 
-    processing_times = []
-    writing_times = []
+    queued_jobs = m.Queue()
+    signal_queue = m.Queue()
 
-    processed = 0
+    distributor1 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue))
+    distributor2 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue))
+    distributor3 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue))
 
+    distributor1.start()
+    distributor2.start()
+    distributor3.start()
+    for read in bam:
+        # pickled_read = read.to_string()
+        queued_jobs.put(read)
+
+    signal_queue.put(True)  # signals to all that we're done
+    distributor1.join()
+    distributor2.join()
+    distributor3.join()
+
+    end_time = time.time()
+
+    print("completed in", str(end_time - start_time))
     ##### Iterate Through Reads #####
     # 1 Make a list of all the reads via the multiprocessing (that's the main output)
     ##### Iterate Through Reads #####
@@ -615,27 +646,43 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
     # 5. global list / etc
     # with Pool(4) as p:
     # p.map(read, range(300000)])
-    global reads
-    global outputWriter
-    outputWriter = output
-    print("prepping data for processing")
-    reads = [r for r in bam]
+    # global reads
+    # global outputWriter
+    # outputWriter = output
+    # print("prepping data for processing")
 
-    cores = 4
-    with Pool(cores) as p:
-        print("starting to process all the reads using " + str(cores) + " cores")
-        startTime = time.time()
-        results = p.map(letsTry, range(len(reads)))
-        endTime = time.time()
-        print("finished processing and writing in " +
-              str(endTime - startTime) + " seconds")
-        # startTime = time.time()
-        # # for result in results:
-        # #     if result is not None:
-        # # outputWriter.write(result)
-        # endTime = time.time()
-        # print("finished writing everything in " +
-        #       str(endTime - startTime) + " seconds")
+    # async def doAllThings():
+    #     tasks = []
+
+    #     for r in bam:
+    #         # spawn processing for this read
+    #         tasks.append(letsTry(r))
+
+    #     for task in tasks:
+    #         await task
+
+    # loop = asyncio.get_event_loop()
+    # loop.run_until_complete(doAllThings())
+
+    # reads = [r for r in bam]  # bad for memory
+
+    # overwrite the iterator to make it link to bam
+
+    # cores = 4
+    # with Pool(cores) as p:
+    #     print("starting to process all the reads using " + str(cores) + " cores")
+    #     startTime = time.time()
+    #     results = p.map(letsTry, range(len(reads)))
+    #     endTime = time.time()
+    #     print("finished processing and writing in " +
+    #           str(endTime - startTime) + " seconds")
+    # startTime = time.time()
+    # # for result in results:
+    # #     if result is not None:
+    # # outputWriter.write(result)
+    # endTime = time.time()
+    # print("finished writing everything in " +
+    #       str(endTime - startTime) + " seconds")
 
     # Trimmer(bam, output)
 
