@@ -108,47 +108,6 @@ consumeQuery = [True, True, False, False, True, False, False, True, True]
 consumeReference = [True, False, True, True, False, False, False, True, True]
 
 
-class Trimmer:
-    def __init__(self, bam, output):
-        queue = mp.Queue()
-        idx = 0
-        self.processes = []
-
-        times = []
-        ##### Iterate Through Reads #####
-
-        # 1. abstract out inner for loop
-        # 2. abstract the read data out (get just the string or something / the minimum)
-        # 3. (general tip) don't construct the object until you're inside the function
-        # 4. iterate over range / key to do a lookup
-        # 5. global list / etc
-        # with Pool(4) as p:
-        # p.map(read, range(300000)])
-        # reads = (r for r in bam)
-        # with Pool(4) as p:
-        #     results = p.map(letsTry, reads)
-
-        # for read in bam:
-        #     start = time.perf_counter()
-        #     process = Process(target=self.process_read,
-        #                       args=([read, idx, queue]))
-        #     self.processes.append(process)
-        #     process.start()
-        #     end = time.perf_counter()
-        #     times.append(end - start)
-        #     if ((idx + 1) % 1000 == 0):
-        #         print("avg time: " + str(addAll(times) / len(times)))
-        #     idx += 1
-
-        # for process in self.processes:
-        #     process.join()
-
-        # results = [queue.get() for p in self.processes]
-        # for p in self.processes:
-        #     r = queue.get()
-        #     output.write(r)
-
-
 reads = []
 primers = []
 outputWriter = ""
@@ -581,7 +540,6 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
     no_primer_count = 0
     quality_trimmed_count = 0
     no_cigar_count = 0
-    unmapped = 0
 
     global min_read_lengthGlobal
     global min_qual_threshGlobal
@@ -641,65 +599,8 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
     end_time = time.time()
 
     print("completed in", str(end_time - start_time))
-    ##### Iterate Through Reads #####
-    # 1 Make a list of all the reads via the multiprocessing (that's the main output)
-    ##### Iterate Through Reads #####
-
-    # 1. abstract out inner for loop
-    # 2. abstract the read data out (get just the string or something / the minimum)
-    # 3. (general tip) don't construct the object until you're inside the function
-    # 4. iterate over range / key to do a lookup
-    # 5. global list / etc
-    # with Pool(4) as p:
-    # p.map(read, range(300000)])
-    # global reads
-    # global outputWriter
-    # outputWriter = output
-    # print("prepping data for processing")
-
-    # async def doAllThings():
-    #     tasks = []
-
-    #     for r in bam:
-    #         # spawn processing for this read
-    #         tasks.append(letsTry(r))
-
-    #     for task in tasks:
-    #         await task
-
-    # loop = asyncio.get_event_loop()
-    # loop.run_until_complete(doAllThings())
-
-    # reads = [r for r in bam]  # bad for memory
-
-    # overwrite the iterator to make it link to bam
-
-    # cores = 4
-    # with Pool(cores) as p:
-    #     print("starting to process all the reads using " + str(cores) + " cores")
-    #     startTime = time.time()
-    #     results = p.map(letsTry, range(len(reads)))
-    #     endTime = time.time()
-    #     print("finished processing and writing in " +
-    #           str(endTime - startTime) + " seconds")
-    # startTime = time.time()
-    # # for result in results:
-    # #     if result is not None:
-    # # outputWriter.write(result)
-    # endTime = time.time()
-    # print("finished writing everything in " +
-    #       str(endTime - startTime) + " seconds")
-
-    # Trimmer(bam, output)
 
     print("\nWrapping up...")
-
-    # print("Average processing time: " +
-    #       str(addAll(processing_times) / len(processing_times)))
-    # print("Highest processing time: " + str(max(processing_times)))
-    # print("Average writing time: " +
-    #       str(addAll(writing_times) / len(writing_times)))
-    # print("Highest writing time: " + str(max(writing_times)))
 
     # Return our statstics (nothing yet)
     return {"removed_reads": removed_reads, "primer_trimmed_count": primer_trimmed_count, "no_primer_count": no_primer_count, "quality_trimmed_count": quality_trimmed_count, "no_cigar_count": no_cigar_count}
