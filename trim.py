@@ -16,7 +16,7 @@ BAM_CDIFF = 8
 BAM_CBACK = 9
 
 # Determine which primers overlap with a given start of a read
-def getOverlappingPrimers(start, primers):
+def get_overlapping_primers_old(start, primers):
 	overlapping = []
 	for primer in primers:
 		# If the start is between the primer's start and end, it's an overlap
@@ -24,6 +24,32 @@ def getOverlappingPrimers(start, primers):
 		if start >= primer[0] and start <= primer[1]:
 			overlapping.append(primer)
 	
+	return overlapping
+
+def find_surrounding_primers(primers, pos, mid, backwards):
+	if mid < 0 or mid >= len(primers): return []
+	direct = -1 if backwards else 1
+	if (pos >= primers[mid][0] and pos <= primers[mid][1]):
+		return [primers[mid]] + find_surrounding_primers(primers, pos, mid+direct, backwards)
+	return []
+
+
+def find_primer_binary(primers, pos, low, high):
+	low = max(0, low)
+	high = min(high, len(primers)-1)
+	if low <= high:
+		mid = (low + high) // 2
+		if (pos >= primers[mid][0] and pos <= primers[mid][1]):
+			return [primers[mid]] + find_surrounding_primers(primers, pos, mid-1, True) + find_surrounding_primers(primers, pos, mid+1, False)
+		elif pos < primers[mid][0]:
+			return find_primer_binary(primers, pos, low, mid-1)
+		else:
+			return find_primer_binary(primers, pos, mid+1, high)
+	return []
+
+
+def get_overlapping_primers(start, primers):
+	overlapping = find_primer_binary(primers, start, 0, len(primers)-1)
 	return overlapping
 
 def getPosOnQuery(cigar, pos, seg_start):
@@ -151,8 +177,8 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		quality_trimmed = False
 
 		##### Primer Trim #####
-		overlapping_start = getOverlappingPrimers(r.reference_start, primers)
-		overlapping_end = getOverlappingPrimers(r.reference_end - 1, primers)
+		overlapping_start = get_overlapping_primers(r.reference_start, primers)
+		overlapping_end = get_overlapping_primers(r.reference_end - 1, primers)
 
 		isize_flag = abs(r.template_length) - max_primer_len > abs(cigarToQLen(r.cigartuples))
 
