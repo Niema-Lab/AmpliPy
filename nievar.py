@@ -2,7 +2,7 @@ import argparse
 import pysam
 import os.path
 import sys
-from trim import trim
+from trim import trim, get_primers
 
 ##### Argument Setup #####
 parser = argparse.ArgumentParser()
@@ -49,11 +49,11 @@ if (args.dest == "trim"):
 	
 	# Open input & output files
 	bam = pysam.AlignmentFile(args.input_file, "r")
-	primer_file = open(args.primer_file)
+	primer_file = args.primer_file
 	output = pysam.AlignmentFile(args.out_file, "w", header=bam.header)
 
 	# Call trim
-	stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh, sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
+	stats = trim(bam, get_primers(primer_file), output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh, sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
 
 	# Print stats
 	print("%i reads were primer trimmed"%stats["primer_trimmed_count"])

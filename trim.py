@@ -2,6 +2,9 @@ import pysam
 import sys
 import time
 import math
+import os
+import numpy
+import json
 
 # Constants, so we can easily see what type of operation we want
 BAM_CMATCH = 0
@@ -116,22 +119,31 @@ def cigarToQLen(cigar):
 	
 	return len
 
-# Information about cigar operations
-cigarMap = ["M", "I", "D", "N", "S", "H", "P", "=", "X"]
-consumeQuery = [True, True, False, False, True, False, False, True, True]
-consumeReference = [True, False, True, True, False, False, False, True, True]
+def preprocess_primers(primers, last_base):
+	str = numpy.empty(shape=(last_base,2), dtype=numpy.ushort) 
+	print(str)
+	for i in range(last_base):
+		prms = get_overlapping_primers(i, primers)
+		if (len(prms)) == 0:
+			str[i] = [-1, -1]
+			continue
+		str[i] = [prms[0][0], prms[len(prms)-1][1]]
+	return str
 
-def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, sliding_window=4, include_no_primer=False):
-	##### Initialize Counters #####
-	removed_reads = 0
-	primer_trimmed_count = 0
-	no_primer_count = 0
-	quality_trimmed_count = 0
-	no_cigar_count = 0
-	unmapped = 0
-
-	##### Build our primer list #####
+def get_primers(filename):
+	cache_index = {}
+	try:
+		cache_index = json.load(open(".amplipy-cache/cache.index"))
+	except (json.decoder.JSONDecodeError, FileNotFoundError):
+		pass
+	if filename in cache_index:
+		print("Cached primers found!")
+		return (cache_index[filename]["max_primer_len"], numpy.load(".amplipy-cache/"+filename+".cache.npy"))
+	
+	print("No cached primers found. Building cache index...")
+	primer_file = open(filename)
 	max_primer_len = 0
+	last_base = 0
 	primers = []
 	for primer in primer_file:
 		data = primer.split()
@@ -143,6 +155,39 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		# Determine the longest primer
 		if end - start + 1 > max_primer_len:
 			max_primer_len = end - start + 1
+		if end > last_base:
+			last_base = end
+
+	sorted_primers = primers
+	sorted_primers.sort(key=lambda e : e[0])
+	arr = preprocess_primers(sorted_primers, last_base)
+	numpy.save(".amplipy-cache/"+filename+".cache", arr)
+
+	cache_index[filename] = {"cache": ".amplipy-cache/"+filename+".cache.npy", "max_primer_len": max_primer_len}
+	json.dump(cache_index, open(".amplipy-cache/cache.index", "w"))
+	return (max_primer_len, arr)
+
+def get_overlapping_primers_preprocessed(start, preproc):
+	if start < len(preproc) and preproc[start][0] != -1:
+		return preproc[start]
+	return [-1, -1]
+
+# Information about cigar operations
+cigarMap = ["M", "I", "D", "N", "S", "H", "P", "=", "X"]
+consumeQuery = [True, True, False, False, True, False, False, True, True]
+consumeReference = [True, False, True, True, False, False, False, True, True]
+
+def trim(bam, primer_data, output, min_read_length=30, min_qual_thresh=20, sliding_window=4, include_no_primer=False):
+	##### Initialize Counters #####
+	removed_reads = 0
+	primer_trimmed_count = 0
+	no_primer_count = 0
+	quality_trimmed_count = 0
+	no_cigar_count = 0
+	unmapped = 0
+
+	max_primer_len = primer_data[0]
+	processed_primers = primer_data[1]
 	
 	starttime = math.floor(time.time())
 	curtime = 0
@@ -177,20 +222,16 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 		quality_trimmed = False
 
 		##### Primer Trim #####
-		overlapping_start = get_overlapping_primers(r.reference_start, primers)
-		overlapping_end = get_overlapping_primers(r.reference_end - 1, primers)
+		overlap_end = get_overlapping_primers_preprocessed(r.reference_start, processed_primers)[1]
+		overlap_start = get_overlapping_primers_preprocessed(r.reference_end - 1, processed_primers)[0]
 
 		isize_flag = abs(r.template_length) - max_primer_len > abs(cigarToQLen(r.cigartuples))
 
 		ref_start_offset = 0
 
-		if not (r.is_paired and isize_flag and r.is_reverse) and len(overlapping_start) > 0:
+		if not (r.is_paired and isize_flag and r.is_reverse) and overlap_end != -1:
 			primer_trimmed = True
 			# Determine greatest overlap
-			overlap_end = 0
-			for primer in overlapping_start:
-				if primer[1] > overlap_end:
-					overlap_end = primer[1]
 			max_delete_start = getPosOnQuery(r.cigartuples, overlap_end + 1, r.reference_start)
 			max_delete_start = max(max_delete_start, 0)
 
@@ -271,13 +312,9 @@ def trim(bam, primer_file, output, min_read_length=30, min_qual_thresh=20, slidi
 			r.reference_start += start_pos
 			ref_start_offset += start_pos
 
-		if not (r.is_paired and isize_flag and not r.is_reverse) and len(overlapping_end) > 0:
+		if not (r.is_paired and isize_flag and not r.is_reverse) and overlap_start != -1:
 			primer_trimmed = True
 			# Determine greatest overlap
-			overlap_start = float("inf")
-			for primer in overlapping_end:
-				if primer[0] < overlap_start:
-					overlap_start = primer[0]
 			max_delete_end = cigarToQLen(r.cigartuples) - getPosOnQuery(r.cigartuples, overlap_start, r.reference_start)
 
 			# Initializations
