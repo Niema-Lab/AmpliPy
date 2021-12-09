@@ -18,10 +18,13 @@ VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 
 # messages
+ERROR_TEXT_EMPTY_BED = "Empty BED file"
 ERROR_TEXT_FILE_EXISTS = "File already exists"
 ERROR_TEXT_FILE_NOT_FOUND = "File not found"
 ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION = "Invalid AmpliPy index file extension (should be .pkl or .pkl.gz)"
+ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
+ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
 HELP_TEXT_PRIMER = "Primer File (BED)"
@@ -109,12 +112,25 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     f = open(reference_fn, mode='r', buffering=BUFSIZE); ref_lines = f.read().strip().splitlines(); f.close()
     if len(ref_lines) < 2 or not ref_lines[0].startswith('>'):
         error("%s: %s" % (ERROR_TEXT_INVALID_FASTA, reference_fn))
+    ref_genome_ID = ref_lines[0][1:].strip()
     ref_genome_sequence = ''.join(ref_lines[i] for i in range(1,len(ref_lines)))
+    if '>' in ref_genome_sequence:
+        error("%s: %s" % (ERROR_TEXT_MULTIPLE_REF_SEQS, reference_fn))
 
-    # TODO FIGURE OUT WHAT ELSE NEEDS TO BE WRITTEN TO INDEX FILE
+    # load primers as list of (start,end) indices
+    f = open(primer_fn, mode='r', buffering=BUFSIZE); primer_lines = f.read().strip().splitlines(); f.close()
+    primer_indices = list()
+    for l in primer_lines:
+        try:
+            curr_ref, curr_start, curr_end, curr_name = l.split('\t')
+            primer_indices.append((int(curr_start), int(curr_end)))
+        except:
+            error("%s: %s" % (ERROR_TEXT_INVALID_BED_LINE, l))
+    if len(primer_indices) == 0:
+        error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
 
     # write output AmpliPy index file
-    output_index_tuple = (ref_genome_sequence)
+    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primer_indices)
     if amplipy_index_fn.lower().endswith('.gz'):
         f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
     else:
