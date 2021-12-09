@@ -151,6 +151,7 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
             error("%s: %s" % (ERROR_TEXT_INVALID_BED_LINE, l))
     if len(primer_indices) == 0:
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
+    primer_indices.sort() # shouldn't be necessary (BED should be sorted), but just in case
 
     # compute all overlapping primers
     print_log("Indexing primers...")
