@@ -86,6 +86,27 @@ def parse_args():
     # parse args and return
     return parser.parse_args()
 
+# find overlapping primers
+def find_overlapping_primers(ref_genome_length, primer_indices):
+    '''Find all primers that cover every index of the reference genome
+
+    Args:
+        ``ref_genome_length`` (``int``): Length of the reference genome
+
+        ``primer_indices`` (``list`` of ``(int,int)``): List of primer indices, where each primer is represented as a ``(start,end)`` tuple. Note that this uses 0-based indices, ``start`` is **in**clusive, and ``end`` is **ex**clusive. For example, `(0,100)` is the 100-length window starting at index 0 and ending at index 99.
+
+    Returns:
+        ``list`` of ``list`` of ``int``: Let ``overlapping_primers`` denote the return value. For each position ``ref_pos`` of the reference genome, ``overlapping_primers[ref_pos]`` is a list of all primers (represented as their index in ``primer_indices``) that cover ``ref_pos``.
+    '''
+    # this is the naive algorithm that just checks every position of the reference genome against every possible primer. Can be improved with clever algorithm
+    # Clever algo sketch: start with ref pos 0 and first primer, and use a queue to track the primers that span the "current" ref pos. While current ref pos is >= the `end` of the primer at the front of the queue (>= because end is exclusive), pop from the queue. While current ref pos is >= start of the next primer (>= because start is inclusive), push to the queue
+    overlapping_primers = [list() for _ in range(ref_genome_length)]
+    for ref_pos in range(ref_genome_length):
+        for i, primer in enumerate(primer_indices):
+            if ref_pos >= primer[0] and ref_pos < primer[1]: # start is inclusive, end is exclusive
+                overlapping_primers[ref_pos].append(i)
+    return overlapping_primers
+
 # run AmpliPy Index
 def run_index(primer_fn, reference_fn, amplipy_index_fn):
     '''Run AmpliPy Index
@@ -109,6 +130,7 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
         error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, amplipy_index_fn))
 
     # load reference genome
+    print_log("Loading reference genome: %s" % reference_fn)
     f = open(reference_fn, mode='r', buffering=BUFSIZE); ref_lines = f.read().strip().splitlines(); f.close()
     if len(ref_lines) < 2 or not ref_lines[0].startswith('>'):
         error("%s: %s" % (ERROR_TEXT_INVALID_FASTA, reference_fn))
@@ -118,6 +140,7 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
         error("%s: %s" % (ERROR_TEXT_MULTIPLE_REF_SEQS, reference_fn))
 
     # load primers as list of (start,end) indices
+    print_log("Loading primers: %s" % primer_fn)
     f = open(primer_fn, mode='r', buffering=BUFSIZE); primer_lines = f.read().strip().splitlines(); f.close()
     primer_indices = list()
     for l in primer_lines:
@@ -129,14 +152,19 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     if len(primer_indices) == 0:
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
 
+    # compute all overlapping primers
+    print_log("Indexing primers...")
+    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primer_indices)
+
     # write output AmpliPy index file
-    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primer_indices)
+    print_log("Writing AmpliPy index to file...")
+    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primer_indices, overlapping_primers)
     if amplipy_index_fn.lower().endswith('.gz'):
         f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
     else:
         f = open(amplipy_index_fn, mode='wb', buffering=BUFSIZE)
     pickle.dump(output_index_tuple, f); f.close()
-    error("INDEX NOT IMPLEMENTED\n- primer_fn: %s\n- reference_fn: %s\n- amplipy_index_fn: %s" % (primer_fn, reference_fn, amplipy_index_fn)) # TODO
+    print_log("AmpliPy index successfully written to file: %s" % amplipy_index_fn)
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
