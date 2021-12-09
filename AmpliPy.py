@@ -119,30 +119,20 @@ def find_overlapping_primers(ref_genome_length, primers):
         ref_pos += 1
     return overlapping_primers
 
-# run AmpliPy Index
-def run_index(primer_fn, reference_fn, amplipy_index_fn):
-    '''Run AmpliPy Index
+# load reference genome
+def load_ref_genome(reference_fn):
+    '''Load reference genome from FASTA
 
     Args:
-        ``primer_fn`` (``str``): Filename of input primer BED
-
         ``reference_fn`` (``str``): Filename of input reference genome FASTA
 
-        ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
+    Returns:
+        ``str``: Reference genome ID
+
+        ``str``: Reference genome sequence
     '''
-    # begin execution
-    print_log("Executing AmpliPy Index (v%s)" % VERSION)
-    if not isfile(primer_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, primer_fn))
     if not isfile(reference_fn):
         error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, reference_fn))
-    if not amplipy_index_fn.lower().endswith('.pkl') and not amplipy_index_fn.lower().endswith('.pkl.gz'):
-        error("%s: %s" % (ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION, amplipy_index_fn))
-    if isfile(amplipy_index_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, amplipy_index_fn))
-
-    # load reference genome
-    print_log("Loading reference genome: %s" % reference_fn)
     f = open(reference_fn, mode='r', buffering=BUFSIZE); ref_lines = f.read().strip().splitlines(); f.close()
     if len(ref_lines) < 2 or not ref_lines[0].startswith('>'):
         error("%s: %s" % (ERROR_TEXT_INVALID_FASTA, reference_fn))
@@ -150,9 +140,19 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     ref_genome_sequence = ''.join(ref_lines[i] for i in range(1,len(ref_lines)))
     if '>' in ref_genome_sequence:
         error("%s: %s" % (ERROR_TEXT_MULTIPLE_REF_SEQS, reference_fn))
+    return ref_genome_ID, ref_genome_sequence
 
-    # load primers as list of (start,end) indices
-    print_log("Loading primers: %s" % primer_fn)
+# load primers
+def load_primers(primer_fn):
+    '''Load primer regions from BED
+
+    Args:
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+    Returns:
+    '''
+    if not isfile(primer_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, primer_fn))
     f = open(primer_fn, mode='r', buffering=BUFSIZE); primer_lines = f.read().strip().splitlines(); f.close()
     primers = list()
     for l in primer_lines:
@@ -164,20 +164,43 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     if len(primers) == 0:
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
     primers.sort() # shouldn't be necessary (BED should be sorted), but just in case
+    return primers
 
-    # compute all overlapping primers
-    print_log("Indexing primers...")
-    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
-
-    # write output AmpliPy index file
-    print_log("Writing AmpliPy index to file...")
-    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primers, overlapping_primers)
+# write AmpliPy index
+def write_amplipy_index(amplipy_index_fn, amplipy_index_tuple):
+    if not amplipy_index_fn.lower().endswith('.pkl') and not amplipy_index_fn.lower().endswith('.pkl.gz'):
+        error("%s: %s" % (ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION, amplipy_index_fn))
+    if isfile(amplipy_index_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, amplipy_index_fn))
     if amplipy_index_fn.lower().endswith('.gz'):
         f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
     else:
         f = open(amplipy_index_fn, mode='wb', buffering=BUFSIZE)
-    pickle.dump(output_index_tuple, f); f.close()
+    pickle.dump(amplipy_index_tuple, f); f.close()
+
+# run AmpliPy Index
+def run_index(primer_fn, reference_fn, amplipy_index_fn):
+    '''Run AmpliPy Index
+
+    Args:
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA
+
+        ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
+    '''
+    print_log("Executing AmpliPy Index (v%s)" % VERSION)
+    print_log("Loading reference genome: %s" % reference_fn)
+    ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
+    print_log("Loading primers: %s" % primer_fn)
+    primers = load_primers(primer_fn)
+    print_log("Indexing primers...")
+    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
+    print_log("Writing AmpliPy index to file...")
+    amplipy_index_tuple = (ref_genome_ID, ref_genome_sequence, primers, overlapping_primers)
+    write_amplipy_index(amplipy_index_fn, amplipy_index_tuple)
     print_log("AmpliPy index successfully written to file: %s" % amplipy_index_fn)
+    return amplipy_index_tuple
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
@@ -191,8 +214,7 @@ def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
         ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
     '''
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
-    
-    curr_primer_error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
+    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
 
 # run AmpliPy Variants
 def run_variants(trimmed_reads_fn, variants_fn):
