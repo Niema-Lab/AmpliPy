@@ -28,7 +28,7 @@ def parse_args():
     if len(argv) == 1:
         argv.append('-h')
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    subparsers = parser.add_subparsers()
+    subparsers = parser.add_subparsers(dest='command')
 
     # AmpliPy Index args
     index_parser = subparsers.add_parser("index", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -63,13 +63,84 @@ def parse_args():
     # parse args and return
     return parser.parse_args()
 
-# index primer data
-def run_index_primers():
-    print("INDEX NOT IMPLEMENTED", file=stderr); exit(1) # TODO
+# run AmpliPy Index
+def run_index(primer_fn, reference_fn, amplipy_index_fn):
+    '''Run AmpliPy Index
+
+    Args:
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA
+
+        ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
+    '''
+    print("INDEX NOT IMPLEMENTED\n- primer_fn: %s\n- reference_fn: %s\n- amplipy_index_fn: %s" % (primer_fn, reference_fn, amplipy_index_fn), file=stderr); exit(1) # TODO
+
+# run AmpliPy Trim
+def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
+    '''Run AmpliPy Trim
+
+    Args:
+        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
+
+        ``amplipy_index_fn`` (``str``): Filename of input AmpliPy index PKL
+
+        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+    '''
+    print("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn), file=stderr); exit(1) # TODO
+
+# run AmpliPy Variants
+def run_variants(trimmed_reads_fn, variants_fn):
+    '''Run AmpliPy Variants
+
+    Args:
+        ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
+
+        ``variants_fn`` (``str``): Filename of output variants VCF
+    '''
+    print("VARIANTS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- variants_fn: %s" % (trimmed_reads_fn, variants_fn), file=stderr); exit(1) # TODO
+
+# run AmpliPy Consensus
+def run_consensus(trimmed_reads_fn, consensus_fn):
+    '''Run AmpliPy Consensus
+
+    Args:
+        ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
+
+        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
+    '''
+    print("CONSENSUS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- consensus_fn: %s" % (trimmed_reads_fn, consensus_fn), file=stderr); exit(1) # TODO
+
+# run AmpliPy AIO (All-In-One)
+def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn):
+    '''Run AmpliPy AIO (All-In-One)
+
+    Args:
+        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
+
+        ``amplipy_index_fn`` (``str``): Filename of input AmpliPy index PKL
+
+        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+
+        ``variants_fn`` (``str``): Filename of output variants VCF
+
+        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
+    '''
+    print("AIO NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s\n- variants_fn: %s\n- consensus_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn), file=stderr); exit(1) # TODO
 
 # main content
 if __name__ == "__main__":
     args = parse_args()
+    if args.command == 'index':
+        run_index(args.primer, args.reference, args.output)
+    elif args.command == 'trim':
+        run_trim(args.input, args.amplipy_index, args.output)
+    elif args.command == 'variants':
+        run_variants(args.input, args.output)
+    elif args.command == 'consensus':
+        run_consensus(args.input, args.output)
+    elif args.command == 'aio':
+        run_aio(args.input, args.amplipy_index, args.output_trimmed_reads, args.output_variants, args.output_consensus)
     exit(1)
 
 # OLD STUFF BELOW #
