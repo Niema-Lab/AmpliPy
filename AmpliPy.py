@@ -10,12 +10,58 @@ from trim import trim
 from sys import argv, stderr
 from os.path import isfile
 
+# constants
+VERSION = '0.0.1'
+
 # messages
-COMMANDS = '''COMMANDS:
-- index     = Index primer BED + reference FASTA
-- trim      = Trim SAM/BAM
-- variants  = Call variants
-- consensus = Call consensus sequence'''
+HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
+HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
+HELP_TEXT_PRIMER = "Primer File (BED)"
+HELP_TEXT_READS_UNTRIMMED = "Untrimmed Reads (SAM/BAM)"
+HELP_TEXT_READS_TRIMMED = "Trimmed Reads (SAM/BAM)"
+HELP_TEXT_REFERENCE = "Reference Genome (FASTA)"
+HELP_TEXT_VARIANTS = "Variant Calls (VCF)"
+
+# parse user args
+def parse_args():
+    # prep arg parser
+    if len(argv) == 1:
+        argv.append('-h')
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    subparsers = parser.add_subparsers()
+
+    # AmpliPy Index args
+    index_parser = subparsers.add_parser("index", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    index_parser.add_argument('-p', '--primer', required=True, type=str, help=HELP_TEXT_PRIMER)
+    index_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
+    index_parser.add_argument('-o', '--output', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
+
+    # AmpliPy Trim args
+    trim_parser = subparsers.add_parser("trim", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    trim_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_UNTRIMMED)
+    trim_parser.add_argument('-a', '--amplipy_index', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
+    trim_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_READS_TRIMMED)
+
+    # AmpliPy Variants args
+    variants_parser = subparsers.add_parser("variants", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    variants_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
+    variants_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_VARIANTS)
+
+    # AmpliPy Consensus args
+    consensus_parser = subparsers.add_parser("consensus", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    consensus_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
+    consensus_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_CONSENSUS)
+
+    # AmpliPy AIO (All-In-One) args
+    aio_parser = subparsers.add_parser("aio", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    aio_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_UNTRIMMED)
+    aio_parser.add_argument('-a', '--amplipy_index', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
+    aio_parser.add_argument('-ot', '--output_trimmed_reads', required=True, type=str, help=HELP_TEXT_READS_TRIMMED)
+    aio_parser.add_argument('-ov', '--output_variants', required=True, type=str, help=HELP_TEXT_VARIANTS)
+    aio_parser.add_argument('-oc', '--output_consensus', required=True, type=str, help=HELP_TEXT_CONSENSUS)
+
+    # parse args and return
+    return parser.parse_args()
 
 # index primer data
 def run_index_primers():
@@ -23,17 +69,8 @@ def run_index_primers():
 
 # main content
 if __name__ == "__main__":
-    if len(argv) != 1:
-        command = argv[1].strip().lower()
-        if command == 'index':
-            run_index_primers()
-        elif command == 'trim':
-            print("NOT IMPLEMENTED", file=stderr); exit(1) # TODO
-        elif command == 'variants':
-            print("NOT IMPLEMENTED", file=stderr); exit(1) # TODO
-        elif command == 'consensus':
-            print("NOT IMPLEMENTED", file=stderr); exit(1) # TODO
-    print("USAGE: %s <command>\n\n%s" % (argv[0], COMMANDS)); exit(1)
+    args = parse_args()
+    exit(1)
 
 # OLD STUFF BELOW #
 
