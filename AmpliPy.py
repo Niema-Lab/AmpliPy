@@ -9,6 +9,7 @@ import gzip
 import pickle
 import pysam
 #from trim import trim
+from collections import deque
 from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
@@ -87,24 +88,35 @@ def parse_args():
     return parser.parse_args()
 
 # find overlapping primers
-def find_overlapping_primers(ref_genome_length, primer_indices):
+def find_overlapping_primers(ref_genome_length, primers):
     '''Find all primers that cover every index of the reference genome
 
     Args:
         ``ref_genome_length`` (``int``): Length of the reference genome
 
-        ``primer_indices`` (``list`` of ``(int,int)``): List of primer indices, where each primer is represented as a ``(start,end)`` tuple. Note that this uses 0-based indices, ``start`` is **in**clusive, and ``end`` is **ex**clusive. For example, `(0,100)` is the 100-length window starting at index 0 and ending at index 99.
+        ``primers`` (``list`` of ``(int,int)``): List of primer indices, where each primer is represented as a ``(start,end)`` tuple. Note that this uses 0-based indices, ``start`` is **in**clusive, and ``end`` is **ex**clusive. For example, `(0,100)` is the 100-length window starting at index 0 and ending at index 99.
 
     Returns:
-        ``list`` of ``list`` of ``int``: Let ``overlapping_primers`` denote the return value. For each position ``ref_pos`` of the reference genome, ``overlapping_primers[ref_pos]`` is a list of all primers (represented as their index in ``primer_indices``) that cover ``ref_pos``.
+        ``list`` of ``list`` of ``int``: Let ``overlapping_primers`` denote the return value. For each position ``ref_pos`` of the reference genome, ``overlapping_primers[ref_pos]`` is a list of all primers (represented as their index in ``primers``) that cover ``ref_pos``.
     '''
-    # this is the naive algorithm that just checks every position of the reference genome against every possible primer. Can be improved with clever algorithm
-    # Clever algo sketch: start with ref pos 0 and first primer, and use a queue to track the primers that span the "current" ref pos. While current ref pos is >= the `end` of the primer at the front of the queue (>= because end is exclusive), pop from the queue. While current ref pos is >= start of the next primer (>= because start is inclusive), push to the queue
+    # set things up
     overlapping_primers = [list() for _ in range(ref_genome_length)]
+    num_primers = len(primers); curr_primers = deque(); i = 0 # i = current index of primers; primers[i] is the "current" (start,end) tuple
+
+    # compute overlapping primers for each position of the reference genome
     for ref_pos in range(ref_genome_length):
-        for i, primer in enumerate(primer_indices):
-            if ref_pos >= primer[0] and ref_pos < primer[1]: # start is inclusive, end is exclusive
-                overlapping_primers[ref_pos].append(i)
+        # remove primers that have now been passed
+        while len(curr_primers) != 0 and ref_pos >= primers[curr_primers[0]][1]:
+            curr_primers.popleft()
+
+        # add primers that have now been entered
+        while i < num_primers and ref_pos >= primers[i][0]:
+            curr_primers.append(i); i += 1
+
+        # the primers in curr_primers must span ref_pos
+        if len(curr_primers) != 0:
+            overlapping_primers[ref_pos] = list(curr_primers)
+        ref_pos += 1
     return overlapping_primers
 
 # run AmpliPy Index
@@ -142,24 +154,24 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     # load primers as list of (start,end) indices
     print_log("Loading primers: %s" % primer_fn)
     f = open(primer_fn, mode='r', buffering=BUFSIZE); primer_lines = f.read().strip().splitlines(); f.close()
-    primer_indices = list()
+    primers = list()
     for l in primer_lines:
         try:
             curr_ref, curr_start, curr_end, curr_name = l.split('\t')
-            primer_indices.append((int(curr_start), int(curr_end)))
+            primers.append((int(curr_start), int(curr_end)))
         except:
             error("%s: %s" % (ERROR_TEXT_INVALID_BED_LINE, l))
-    if len(primer_indices) == 0:
+    if len(primers) == 0:
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
-    primer_indices.sort() # shouldn't be necessary (BED should be sorted), but just in case
+    primers.sort() # shouldn't be necessary (BED should be sorted), but just in case
 
     # compute all overlapping primers
     print_log("Indexing primers...")
-    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primer_indices)
+    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
 
     # write output AmpliPy index file
     print_log("Writing AmpliPy index to file...")
-    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primer_indices, overlapping_primers)
+    output_index_tuple = (ref_genome_ID, ref_genome_sequence, primers, overlapping_primers)
     if amplipy_index_fn.lower().endswith('.gz'):
         f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
     else:
@@ -179,7 +191,8 @@ def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
         ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
     '''
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
-    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
+    
+    curr_primer_error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
 
 # run AmpliPy Variants
 def run_variants(trimmed_reads_fn, variants_fn):
@@ -238,10 +251,9 @@ if __name__ == "__main__":
         run_consensus(args.input, args.output)
     elif args.command == 'aio':
         run_aio(args.input, args.amplipy_index, args.output_trimmed_reads, args.output_variants, args.output_consensus)
-    exit(1)
 
 # OLD STUFF BELOW #
-
+exit() # TODO THIS JUST STOPS EXECUTION BEFORE WE GO LOWER
 ##### Argument Setup #####
 parser = argparse.ArgumentParser()
 parser.add_argument("-d", dest="debug", help="Enable debug mode for extra output",
