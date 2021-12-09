@@ -5,6 +5,8 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 
 # imports
 import argparse
+import gzip
+import pickle
 import pysam
 #from trim import trim
 from datetime import datetime
@@ -16,6 +18,10 @@ VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 
 # messages
+ERROR_TEXT_FILE_EXISTS = "File already exists"
+ERROR_TEXT_FILE_NOT_FOUND = "File not found"
+ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION = "Invalid AmpliPy index file extension (should be .pkl or .pkl.gz)"
+ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
 HELP_TEXT_PRIMER = "Primer File (BED)"
@@ -88,8 +94,32 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
 
         ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
     '''
+    # begin execution
     print_log("Executing AmpliPy Index (v%s)" % VERSION)
-    f = open(reference_fn, 'r', buffering=BUFSIZE); ref_lines = f.read().splitlines(); f.close()
+    if not isfile(primer_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, primer_fn))
+    if not isfile(reference_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, reference_fn))
+    if not amplipy_index_fn.lower().endswith('.pkl') and not amplipy_index_fn.lower().endswith('.pkl.gz'):
+        error("%s: %s" % (ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION, amplipy_index_fn))
+    if isfile(amplipy_index_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, amplipy_index_fn))
+
+    # load reference genome
+    f = open(reference_fn, mode='r', buffering=BUFSIZE); ref_lines = f.read().strip().splitlines(); f.close()
+    if len(ref_lines) < 2 or not ref_lines[0].startswith('>'):
+        error("%s: %s" % (ERROR_TEXT_INVALID_FASTA, reference_fn))
+    ref_genome_sequence = ''.join(ref_lines[i] for i in range(1,len(ref_lines)))
+
+    # TODO FIGURE OUT WHAT ELSE NEEDS TO BE WRITTEN TO INDEX FILE
+
+    # write output AmpliPy index file
+    output_index_tuple = (ref_genome_sequence)
+    if amplipy_index_fn.lower().endswith('.gz'):
+        f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
+    else:
+        f = open(amplipy_index_fn, mode='wb', buffering=BUFSIZE)
+    pickle.dump(output_index_tuple, f); f.close()
     error("INDEX NOT IMPLEMENTED\n- primer_fn: %s\n- reference_fn: %s\n- amplipy_index_fn: %s" % (primer_fn, reference_fn, amplipy_index_fn)) # TODO
 
 # run AmpliPy Trim
@@ -150,6 +180,8 @@ def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn,
 
 # main content
 if __name__ == "__main__":
+    if len(argv) == 1:
+        pass # TODO: In the future, run GUI here to fill in argv accordingly (so argparse will run fine)
     args = parse_args()
     if args.command == 'index':
         run_index(args.primer, args.reference, args.output)
