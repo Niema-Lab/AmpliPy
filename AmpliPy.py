@@ -6,12 +6,14 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 # imports
 import argparse
 import pysam
-from trim import trim
-from sys import argv, stderr
+#from trim import trim
+from datetime import datetime
 from os.path import isfile
+from sys import argv, stderr
 
 # constants
 VERSION = '0.0.1'
+BUFSIZE = 1048576 # 1 MB
 
 # messages
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
@@ -21,6 +23,18 @@ HELP_TEXT_READS_UNTRIMMED = "Untrimmed Reads (SAM/BAM)"
 HELP_TEXT_READS_TRIMMED = "Trimmed Reads (SAM/BAM)"
 HELP_TEXT_REFERENCE = "Reference Genome (FASTA)"
 HELP_TEXT_VARIANTS = "Variant Calls (VCF)"
+
+# print log
+def print_log(s='', end='\n'):
+    print("[%s] %s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),s), end=end, file=stderr); stderr.flush()
+
+# error message
+def error(s=None):
+    if s is None:
+        print_log("ERROR")
+    else:
+        print_log("ERROR: %s" % s)
+    exit(1)
 
 # parse user args
 def parse_args():
@@ -74,7 +88,9 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
 
         ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
     '''
-    print("INDEX NOT IMPLEMENTED\n- primer_fn: %s\n- reference_fn: %s\n- amplipy_index_fn: %s" % (primer_fn, reference_fn, amplipy_index_fn), file=stderr); exit(1) # TODO
+    print_log("Executing AmpliPy Index (v%s)" % VERSION)
+    f = open(reference_fn, 'r', buffering=BUFSIZE); ref_lines = f.read().splitlines(); f.close()
+    error("INDEX NOT IMPLEMENTED\n- primer_fn: %s\n- reference_fn: %s\n- amplipy_index_fn: %s" % (primer_fn, reference_fn, amplipy_index_fn)) # TODO
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
@@ -87,7 +103,8 @@ def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
 
         ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
     '''
-    print("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn), file=stderr); exit(1) # TODO
+    print_log("Executing AmpliPy Trim (v%s)" % VERSION)
+    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
 
 # run AmpliPy Variants
 def run_variants(trimmed_reads_fn, variants_fn):
@@ -98,7 +115,8 @@ def run_variants(trimmed_reads_fn, variants_fn):
 
         ``variants_fn`` (``str``): Filename of output variants VCF
     '''
-    print("VARIANTS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- variants_fn: %s" % (trimmed_reads_fn, variants_fn), file=stderr); exit(1) # TODO
+    print_log("Executing AmpliPy Variants (v%s)" % VERSION)
+    error("VARIANTS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- variants_fn: %s" % (trimmed_reads_fn, variants_fn)) # TODO
 
 # run AmpliPy Consensus
 def run_consensus(trimmed_reads_fn, consensus_fn):
@@ -109,7 +127,8 @@ def run_consensus(trimmed_reads_fn, consensus_fn):
 
         ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
     '''
-    print("CONSENSUS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- consensus_fn: %s" % (trimmed_reads_fn, consensus_fn), file=stderr); exit(1) # TODO
+    print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
+    error("CONSENSUS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- consensus_fn: %s" % (trimmed_reads_fn, consensus_fn)) # TODO
 
 # run AmpliPy AIO (All-In-One)
 def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn):
@@ -126,7 +145,8 @@ def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn,
 
         ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
     '''
-    print("AIO NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s\n- variants_fn: %s\n- consensus_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn), file=stderr); exit(1) # TODO
+    print_log("Executing AmpliPy AIO (v%s)" % VERSION)
+    error("AIO NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s\n- variants_fn: %s\n- consensus_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn)) # TODO
 
 # main content
 if __name__ == "__main__":
