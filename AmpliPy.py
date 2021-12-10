@@ -320,7 +320,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
             if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
                 pos_start = True; new_cigar.append((cig,n)); continue
 
-            # if our operation consumes the query"
+            # if our operation consumes the query
             ref_add = 0
             if CONSUME_QUERY[cig]:
                 # How much do we have to delete?
@@ -366,7 +366,28 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
             if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
                 pos_start = True; new_cigar.append((cig,n)); continue
 
-            # TODO FINISH REVERSE PRIMER
+            # if our operation consumes the query
+            if CONSUME_QUERY[cig]:
+                # How much do we have to delete?
+                if del_len >= n: # our entire operation needs to be deleted
+                    new_cigar.append((BAM_CSOFT_CLIP,n))
+                elif 0 < del_len < n: # We need to delete SOME of our segment, but we still have more later
+                    new_cigar.append((BAM_CSOFT_CLIP,del_len))
+                elif del_len == 0: # Just keep clipping
+                    new_cigar.append((BAM_CSOFT_CLIP,n)); continue
+
+                # Update based on how much we just deleted
+                tmp = n
+                n = max(del_len - tmp, 0)
+                del_len = max(del_len - tmp, 0)
+
+                # If there is still more left to do, append it
+                if n > 0:
+                    new_cigar.append((cig,n))
+
+                # If we are done and just consumed, we want to just start appending everything
+                if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
+                    pos_start = True
 
         # update our alignment accordingly
         s.cigartuples = list(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
