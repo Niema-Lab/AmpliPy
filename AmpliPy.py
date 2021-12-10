@@ -17,7 +17,20 @@ from sys import argv, stderr
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
-CONSUME_QUERY = [True, True, False, False, True, False, False, True, True] # CONSUME_QUERY[i] = True if CIGAR operation i consumes letters from query
+
+# CIGAR operations
+CIGAR = ['BAM_CMATCH', 'BAM_CINS', 'BAM_CDEL', 'BAM_CREF_SKIP', 'BAM_CSOFT_CLIP', 'BAM_CHARD_CLIP', 'BAM_CPAD', 'BAM_CEQUAL', 'BAM_CDIFF', 'BAM_CBACK']
+BAM_CMATCH     = 0
+BAM_CINS       = 1
+BAM_CDEL       = 2
+BAM_CREF_SKIP  = 3
+BAM_CSOFT_CLIP = 4
+BAM_CHARD_CLIP = 5
+BAM_CPAD       = 6
+BAM_CEQUAL     = 7
+BAM_CDIFF      = 8
+CONSUME_QUERY = [True, True,  False, False, True,  False, False, True, True] # CONSUME_QUERY[i] = True if CIGAR operation i consumes letters from query
+CONSUME_REF   = [True, False, True,  True,  False, False, False, True, True] # CONSUME_REF[i]   = True if CIGAR operation i consumes letters from reference
 
 # messages
 ERROR_TEXT_EMPTY_BED = "Empty BED file"
@@ -284,13 +297,10 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
 
 # trim a single read
 def trim_read(s, overlapping_primers, primers, max_primer_len):
-    '''Primer-trim and quality-trim an individual read
+    '''Primer-trim and quality-trim an individual read. In the future, for multiprocessing, I can just change ``s`` argument to be the relevant member variables (e.g. reference_start, reference_end, query_length, is_paired, is_reverse, etc.) and just return the final updated pysam cigartuples (list of tuples)
 
     Args:
         ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
-
-    Returns:
-        ``int``: A status value denoting what happened during primer trimming
     '''
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
     overlapping_primer_inds_start = overlapping_primers[s.reference_start]
@@ -299,25 +309,67 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
 
     # trim forward primer (paired reads: just forward; unpaired reads: all)
     if len(overlapping_primer_inds_start) > 0 and ((s.is_paired and not s.is_reverse) or not s.is_paired):
+        # prepare to trim forward primer
         max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) + 1 # just after max end of overlapping primers
         delete_start = ref_pos_to_query_pos(s, max_overlap_end, mode=1)
-        pass # TODO
+        new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
+
+        # for each operation in the CIGAR
+        for cig, n in s.cigartuples:
+            # if nothing left to delete, just append everything
+            if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
+                pos_start = True; new_cigar.append((cig,n)); continue
+
+            # if our operation consumes the query"
+            ref_add = 0
+            if CONSUME_QUERY[cig]:
+                # How much do we have to delete?
+                if del_len >= n: # our entire operation needs to be deleted
+                    new_cigar.append((BAM_CSOFT_CLIP,n))
+                elif 0 < del_len < n: # We need to delete SOME of our segment, but we still have more later
+                    new_cigar.append((BAM_CSOFT_CLIP,del_len))
+                elif del_len == 0: # Just keep clipping
+                    new_cigar.append((BAM_CSOFT_CLIP,n)); continue
+
+                # Update based on how much we just deleted
+                ref_add = min(del_len, n)
+                tmp = n
+                n = max(n - del_len, 0)
+                del_len = max(del_len - tmp, 0)
+
+                # If there is still more left to do, append it
+                if n > 0:
+                    new_cigar.append((cig,n))
+
+                # If we are done and just consumed, we want to just start appending everything
+                if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
+                    pos_start = True
+
+            # If our trim consumed the reference, we need to move our read's start position forward
+            if CONSUME_REF[cig]:
+                start_pos += ref_add
+
+        # update our alignment accordingly
+        s.cigartuples = new_cigar
+        s.reference_start += start_pos
 
     # trim reverse primer (paired reads: just reverse; unpaired reads: all)
     if len(overlapping_primer_inds_end) > 0 and ((s.is_paired and s.is_reverse) or not s.is_paired):
+        # prepare to trim reverse primer
         min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 1 # just before min start of overlapping primers
         delete_end = ref_pos_to_query_pos(s, min_overlap_start, mode=2)
-        pass # TODO
+        new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
-        '''
-        # compute new alignment position
-        if s.is_reverse:
-            overlap_end = min(primers[i][0] for i in overlapping_primer_inds_start) - 1 # just before min start of overlapping primers
-            max_del_len = s.query_alignment_length - 1
-        else:
-            overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) + 1 # just after max end of overlapping primers
-            max_del_len = 
-        '''
+        # for each operation in the CIGAR (reverse order because reverse primer)
+        for cig, n in reversed(s.cigartuples):
+            # if nothing left to delete, just append everything
+            if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
+                pos_start = True; new_cigar.append((cig,n)); continue
+
+            # TODO FINISH REVERSE PRIMER
+
+        # update our alignment accordingly
+        s.cigartuples = list(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
