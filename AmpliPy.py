@@ -7,16 +7,17 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 import argparse
 import gzip
 import pickle
+import pysam
 #from trim import trim
 from collections import deque
 from datetime import datetime
 from os.path import isfile
-from pysam import AlignmentFile
 from sys import argv, stderr
 
 # constants
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
+CONSUME_QUERY = [True, True, False, False, True, False, False, True, True] # CONSUME_QUERY[i] = True if CIGAR operation i consumes letters from query
 
 # messages
 ERROR_TEXT_EMPTY_BED = "Empty BED file"
@@ -211,17 +212,31 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     print_log("AmpliPy index successfully written to file: %s" % amplipy_index_fn)
     return amplipy_index_tuple
 
-# trim an individual read
-def trim_read(s):
-    '''Trim an individual read
-
-    Args:
-        ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
-
-    Returns:
-        ``pysam.AlignedSegment``: The trimmed read
-    '''
-    exit(1) # TODO
+# create AlignmentFile objects for SAM/BAM input and output files
+def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
+    tmp = pysam.set_verbosity(0) # disable htslib verbosity to avoid "no index file" warning
+    if untrimmed_reads_fn.lower() == 'stdin':
+        in_aln = pysam.AlignmentFile('-', 'r') # standard input --> SAM
+    elif not isfile(untrimmed_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, untrimmed_reads_fn))
+    elif untrimmed_reads_fn.lower().endswith('.sam'):
+        in_aln = pysam.AlignmentFile(untrimmed_reads_fn, 'r')
+    elif untrimmed_reads_fn.lower().endswith('.bam'):
+        in_aln = pysam.AlignmentFile(untrimmed_reads_fn, 'rb')
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, untrimmed_reads_fn))
+    if trimmed_reads_fn.lower() == 'stdout':
+        out_aln = pysam.AlignmentFile('-', 'w', template=in_aln) # standard output --> SAM
+    elif isfile(trimmed_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, trimmed_reads_fn))
+    elif trimmed_reads_fn.lower().endswith('.sam'):
+        out_aln = pysam.AlignmentFile(trimmed_reads_fn, 'w', template=in_aln)
+    elif trimmed_reads_fn.lower().endswith('.bam'):
+        out_aln = pysam.AlignmentFile(trimmed_reads_fn, 'wb', template=in_aln)
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, trimmed_reads_fn))
+    pysam.set_verbosity(tmp) # re-enable htslib verbosity
+    return in_aln, out_aln
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
@@ -258,40 +273,51 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     primers = load_primers(primer_fn)
     print_log("Precalculate overlapping primers...")
     overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
+    print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
+    print_log("Output untrimmed SAM/BAM: %s" % trimmed_reads_fn)
+    in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
 
     # initialize counters
     NUM_UNMAPPED = 0
+    NUM_NO_CIGAR = 0
 
-    # create pysam object for input file
-    print_log("Opening input untrimmed SAM/BAM for reading: %s" % untrimmed_reads_fn)
-    if untrimmed_reads_fn.lower() == 'stdin':
-        in_aln = AlignmentFile('-', 'r') # standard input --> SAM
-    elif not isfile(untrimmed_reads_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, untrimmed_reads_fn))
-    elif untrimmed_reads_fn.lower().endswith('.sam'):
-        in_aln = AlignmentFile(untrimmed_reads_fn, 'r')
-    elif untrimmed_reads_fn.lower().endswith('.bam'):
-        in_aln = AlignmentFile(untrimmed_reads_fn, 'rb')
-    else:
-        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, untrimmed_reads_fn))
+    # nested function: trim primers from an individual read
+    def trim_read_primers(s):
+        '''Trim primers from an individual read
 
-    # create pysam object for output file
-    print_log("Opening output SAM/BAM for writing trimmed reads: %s" % trimmed_reads_fn)
-    if trimmed_reads_fn.lower() == 'stdout':
-        out_aln = AlignmentFile('-', 'w', template=in_aln) # standard output --> SAM
-    elif isfile(trimmed_reads_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, trimmed_reads_fn))
-    elif trimmed_reads_fn.lower().endswith('.sam'):
-        out_aln = AlignmentFile(trimmed_reads_fn, 'w', template=in_aln)
-    elif trimmed_reads_fn.lower().endswith('.bam'):
-        out_aln = AlignmentFile(trimmed_reads_fn, 'wb', template=in_aln)
-    else:
-        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, trimmed_reads_fn))
+        Args:
+            ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+        '''
+        # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
+        overlapping_primer_inds_start = overlapping_primers[s.reference_start]
+        overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
+
+        # no primers covered start of alignment, so don't try to primer trim
+        if len(overlapping_primer_inds_start) == 0:
+            return
+
+    # nested function: quality trim an individual read
+    def trim_read_quality(s):
+        '''Quality trim an individual read
+
+        Args:
+            ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+        '''
+        pass # TODO IMPLEMENT
 
     # trim reads
     print_log("Trimming reads...")
     for s in in_aln:
-        out_aln.write(trim_read(s))
+        # skip unmapped reads
+        if s.is_unmapped:
+            NUM_UNMAPPED += 1; continue
+
+        # skip reads without CIGAR
+        if s.cigartuples is None:
+            NUM_NO_CIGAR += 1; continue
+
+        # trim this read and write the result
+        trim_read_primers(s); trim_read_quality(s); out_aln.write(s)
 
 	# TODO DELETE WHEN DONE
     error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- primer_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, primer_fn, trimmed_reads_fn)) # TODO
