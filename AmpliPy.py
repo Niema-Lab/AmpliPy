@@ -69,7 +69,7 @@ def parse_args():
     trim_parser.add_argument('-m', '--min_length', required=False, type=int, default=30, help=HELP_TEXT_TRIM_MIN_LENGTH)
     trim_parser.add_argument('-q', '--min_quality', required=False, type=int, default=20, help=HELP_TEXT_TRIM_MIN_QUAL)
     trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=4, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
-    trim_parser.add_argument('-e', '--include_reads_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
+    trim_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
     # AmpliPy Variants args
     variants_parser = subparsers.add_parser("variants", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -211,7 +211,7 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     return amplipy_index_tuple
 
 # run AmpliPy Trim
-def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_reads_no_primer):
+def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
     '''Run AmpliPy Trim
 
     * This is where iVar's code does iVar Trim:  https://github.com/TheCrossBoy/ivar/blob/2829ebf359fab633bac5e9f4d19c9c42746629fd/src/trim_primer_quality.cpp#L559-L928
@@ -235,7 +235,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
 
         ``sliding_window_width`` (``int``): Width of sliding window
 
-        ``include_reads_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
+        ``include_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
     '''
     # set things up
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         pass # TODO: In the future, run GUI here to fill in argv accordingly (so argparse will run fine)
     args = parse_args()
     if args.command == 'trim':
-        run_trim(args.input, args.primer, args.reference, args.output, args.primer_pos_offset, args.min_length, args.min_quality, args.sliding_window_width, args.include_reads_no_primer)
+        run_trim(args.input, args.primer, args.reference, args.output, args.primer_pos_offset, args.min_length, args.min_quality, args.sliding_window_width, args.include_no_primer)
     elif args.command == 'variants':
         run_variants(args.input, args.output)
     elif args.command == 'consensus':
