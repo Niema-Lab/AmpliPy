@@ -32,6 +32,11 @@ HELP_TEXT_PRIMER = "Primer File (BED)"
 HELP_TEXT_READS_UNTRIMMED = "Untrimmed Reads (SAM/BAM)"
 HELP_TEXT_READS_TRIMMED = "Trimmed Reads (SAM/BAM)"
 HELP_TEXT_REFERENCE = "Reference Genome (FASTA)"
+HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER = "Include reads with no primers"
+HELP_TEXT_TRIM_MIN_LENGTH = "Minimum length of read to retain after trimming"
+HELP_TEXT_TRIM_MIN_QUAL = "Minimum quality threshold for sliding window to pass"
+HELP_TEXT_TRIM_PRIMER_POS_OFFSET = "Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed"
+HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH = "Width of sliding window"
 HELP_TEXT_VARIANTS = "Variant Calls (VCF)"
 
 # print log
@@ -54,32 +59,35 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     subparsers = parser.add_subparsers(dest='command')
 
-    # AmpliPy Index args
-    index_parser = subparsers.add_parser("index", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    index_parser.add_argument('-p', '--primer', required=True, type=str, help=HELP_TEXT_PRIMER)
-    index_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
-    index_parser.add_argument('-o', '--output', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
-
     # AmpliPy Trim args
     trim_parser = subparsers.add_parser("trim", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     trim_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_UNTRIMMED)
-    trim_parser.add_argument('-a', '--amplipy_index', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
+    trim_parser.add_argument('-p', '--primer', required=True, type=str, help=HELP_TEXT_PRIMER)
+    trim_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     trim_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_READS_TRIMMED)
+    trim_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=0, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
+    trim_parser.add_argument('-m', '--min_length', required=False, type=int, default=30, help=HELP_TEXT_TRIM_MIN_LENGTH)
+    trim_parser.add_argument('-q', '--min_quality', required=False, type=int, default=20, help=HELP_TEXT_TRIM_MIN_QUAL)
+    trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=4, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
+    trim_parser.add_argument('-e', '--include_reads_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
     # AmpliPy Variants args
     variants_parser = subparsers.add_parser("variants", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     variants_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
+    variants_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     variants_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_VARIANTS)
 
     # AmpliPy Consensus args
     consensus_parser = subparsers.add_parser("consensus", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     consensus_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
+    consensus_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     consensus_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_CONSENSUS)
 
     # AmpliPy AIO (All-In-One) args
     aio_parser = subparsers.add_parser("aio", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     aio_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_UNTRIMMED)
-    aio_parser.add_argument('-a', '--amplipy_index', required=True, type=str, help=HELP_TEXT_AMPLIPY_INDEX)
+    aio_parser.add_argument('-p', '--primer', required=True, type=str, help=HELP_TEXT_PRIMER)
+    aio_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     aio_parser.add_argument('-ot', '--output_trimmed_reads', required=True, type=str, help=HELP_TEXT_READS_TRIMMED)
     aio_parser.add_argument('-ov', '--output_variants', required=True, type=str, help=HELP_TEXT_VARIANTS)
     aio_parser.add_argument('-oc', '--output_consensus', required=True, type=str, help=HELP_TEXT_CONSENSUS)
@@ -203,18 +211,43 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     return amplipy_index_tuple
 
 # run AmpliPy Trim
-def run_trim(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn):
+def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_reads_no_primer):
     '''Run AmpliPy Trim
+
+    * This is where iVar's code does iVar Trim:  https://github.com/TheCrossBoy/ivar/blob/2829ebf359fab633bac5e9f4d19c9c42746629fd/src/trim_primer_quality.cpp#L559-L928
+    * This is where it does the actual trimming: https://github.com/TheCrossBoy/ivar/blob/2829ebf359fab633bac5e9f4d19c9c42746629fd/src/trim_primer_quality.cpp#L696-L857
+
 
     Args:
         ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
 
-        ``amplipy_index_fn`` (``str``): Filename of input AmpliPy index PKL
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
 
         ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+
+        ``primer_pos_offset`` (``int``): Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
+
+        ``min_length`` (``int``): Minimum length of read to retain after trimming
+
+        ``min_quality`` (``int``): Minimum quality threshold for sliding window to pass
+
+        ``sliding_window_width`` (``int``): Width of sliding window
+
+        ``include_reads_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
     '''
+    # set things up
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
-    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn)) # TODO
+    print_log("Loading reference genome: %s" % reference_fn)
+    ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
+    print_log("Loading primers: %s" % primer_fn)
+    primers = load_primers(primer_fn)
+    print_log("Precalculate overlapping primers...")
+    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
+
+	# TODO DELETE WHEN DONE
+    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- primer_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, primer_fn, trimmed_reads_fn)) # TODO
 
 # run AmpliPy Variants
 def run_variants(trimmed_reads_fn, variants_fn):
@@ -222,6 +255,8 @@ def run_variants(trimmed_reads_fn, variants_fn):
 
     Args:
         ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
 
         ``variants_fn`` (``str``): Filename of output variants VCF
     '''
@@ -235,6 +270,8 @@ def run_consensus(trimmed_reads_fn, consensus_fn):
     Args:
         ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
 
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
+
         ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
     '''
     print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
@@ -247,7 +284,9 @@ def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn,
     Args:
         ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
 
-        ``amplipy_index_fn`` (``str``): Filename of input AmpliPy index PKL
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
 
         ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
 
@@ -263,10 +302,8 @@ if __name__ == "__main__":
     if len(argv) == 1:
         pass # TODO: In the future, run GUI here to fill in argv accordingly (so argparse will run fine)
     args = parse_args()
-    if args.command == 'index':
-        run_index(args.primer, args.reference, args.output)
-    elif args.command == 'trim':
-        run_trim(args.input, args.amplipy_index, args.output)
+    if args.command == 'trim':
+        run_trim(args.input, args.primer, args.reference, args.output, args.primer_pos_offset, args.min_length, args.min_quality, args.sliding_window_width, args.include_reads_no_primer)
     elif args.command == 'variants':
         run_variants(args.input, args.output)
     elif args.command == 'consensus':
