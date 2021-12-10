@@ -8,7 +8,6 @@ import argparse
 import gzip
 import pickle
 import pysam
-#from trim import trim
 from collections import deque
 from datetime import datetime
 from os.path import isfile
@@ -215,6 +214,18 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
 
 # create AlignmentFile objects for SAM/BAM input and output files
 def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
+    '''Create ``pysam.AlignmentFile`` objects for the input and output SAM/BAM files
+
+    Args:
+        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
+
+        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+
+    Returns:
+        ``pysam.AlignmentFile``: Stream for reading input untrimmed reads SAM/BAM
+
+        ``pysam.AlignmentFile``: Stream for writing output trimmed reads SAM/BAM
+    '''
     tmp = pysam.set_verbosity(0) # disable htslib verbosity to avoid "no index file" warning
     if untrimmed_reads_fn.lower() == 'stdin':
         in_aln = pysam.AlignmentFile('-', 'r') # standard input --> SAM
@@ -239,29 +250,74 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     pysam.set_verbosity(tmp) # re-enable htslib verbosity
     return in_aln, out_aln
 
-# nested function: trim primers from an individual read
-def trim_read_primers(s, overlapping_primers):
-    '''Trim primers from an individual read
+# get the query position that mapped to a given reference position
+def ref_pos_to_query_pos(s, ref_pos, mode=0):
+    '''Given a reference position and a query alignment, find the position in the query that mapped to that reference position
+
+    Args:
+        ``s`` (``pysam.AlignedSegment``): The mapped read
+
+        ``ref_pos`` (``int``): The reference position
+
+        ``mode`` (``int``): How to handle if the reference position doesn't exactly match the query (e.g. deletion). 0 = must match ref_pos, 1 = match ref_pos or first position > ref_pos, 2 = match ref_pos or last position < ref_pos
+    '''
+    aligned_pair_iter = s.get_aligned_pairs(matches_only=True)
+    if mode == 0:
+        for q_pos, r_pos in aligned_pair_iter:
+            if r_pos == ref_pos:
+                return q_pos
+    elif mode == 1:
+        for q_pos, r_pos in aligned_pair_iter:
+            if r_pos >= ref_pos:
+                return q_pos
+    elif mode == 2:
+        prev_r_pos = None
+        for q_pos, r_pos in aligned_pair_iter:
+            if r_pos >= ref_pos:
+                if prev_r_pos is None:
+                    error("prev_r_pos is None")
+                return prev_r_pos
+            prev_r_pos = r_pos
+    else:
+        error("Invalid mode: %s" % mode)
+    error("Reference position did not map to query position: %d\n%s" % (ref_pos, str(s.get_aligned_pairs(matches_only=True))))
+
+# trim a single read
+def trim_read(s, overlapping_primers, primers, max_primer_len):
+    '''Primer-trim and quality-trim an individual read
 
     Args:
         ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+
+    Returns:
+        ``int``: A status value denoting what happened during primer trimming
     '''
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
     overlapping_primer_inds_start = overlapping_primers[s.reference_start]
     overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
+    isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
 
-    # no primers covered start of alignment, so don't try to primer trim
-    if len(overlapping_primer_inds_start) == 0:
-        return
+    # trim forward primer (paired reads: just forward; unpaired reads: all)
+    if len(overlapping_primer_inds_start) > 0 and ((s.is_paired and not s.is_reverse) or not s.is_paired):
+        max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) + 1 # just after max end of overlapping primers
+        delete_start = ref_pos_to_query_pos(s, max_overlap_end, mode=1)
+        pass # TODO
 
-# nested function: quality trim an individual read
-def trim_read_quality(s):
-    '''Quality trim an individual read
+    # trim reverse primer (paired reads: just reverse; unpaired reads: all)
+    if len(overlapping_primer_inds_end) > 0 and ((s.is_paired and s.is_reverse) or not s.is_paired):
+        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 1 # just before min start of overlapping primers
+        delete_end = ref_pos_to_query_pos(s, min_overlap_start, mode=2)
+        pass # TODO
 
-    Args:
-        ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
-    '''
-    pass # TODO IMPLEMENT
+        '''
+        # compute new alignment position
+        if s.is_reverse:
+            overlap_end = min(primers[i][0] for i in overlapping_primer_inds_start) - 1 # just before min start of overlapping primers
+            max_del_len = s.query_alignment_length - 1
+        else:
+            overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) + 1 # just after max end of overlapping primers
+            max_del_len = 
+        '''
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
@@ -296,6 +352,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
     print_log("Loading primers: %s" % primer_fn)
     primers = load_primers(primer_fn)
+    max_primer_len = max(end-start for start,end in primers)
     print_log("Precalculate overlapping primers...")
     overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
     print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
@@ -308,7 +365,8 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
 
     # trim reads
     print_log("Trimming reads...")
-    for s_i, s in enumerate(in_aln):
+    s_i = 0
+    for s in in_aln:
         # skip unmapped reads
         if s.is_unmapped:
             NUM_UNMAPPED += 1; continue
@@ -318,11 +376,11 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
             NUM_NO_CIGAR += 1; continue
 
         # trim this read and write the result
-        trim_read_primers(s, overlapping_primers)
-        trim_read_quality(s)
+        status_trim_primers = trim_read(s, overlapping_primers, primers, max_primer_len)
         out_aln.write(s)
 
         # print progress update
+        s_i += 1
         if s_i % PROGRESS_NUM_READS == 0:
             print_log("Trimmed %d reads..." % s_i)
     print_log("Finished trimming %d reads" % s_i)
