@@ -17,6 +17,7 @@ from sys import argv, stderr
 # constants
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
+PROGRESS_NUM_READS = 100000
 CONSUME_QUERY = [True, True, False, False, True, False, False, True, True] # CONSUME_QUERY[i] = True if CIGAR operation i consumes letters from query
 
 # messages
@@ -238,6 +239,30 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     pysam.set_verbosity(tmp) # re-enable htslib verbosity
     return in_aln, out_aln
 
+# nested function: trim primers from an individual read
+def trim_read_primers(s, overlapping_primers):
+    '''Trim primers from an individual read
+
+    Args:
+        ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+    '''
+    # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
+    overlapping_primer_inds_start = overlapping_primers[s.reference_start]
+    overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
+
+    # no primers covered start of alignment, so don't try to primer trim
+    if len(overlapping_primer_inds_start) == 0:
+        return
+
+# nested function: quality trim an individual read
+def trim_read_quality(s):
+    '''Quality trim an individual read
+
+    Args:
+        ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+    '''
+    pass # TODO IMPLEMENT
+
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
     '''Run AmpliPy Trim
@@ -281,33 +306,9 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     NUM_UNMAPPED = 0
     NUM_NO_CIGAR = 0
 
-    # nested function: trim primers from an individual read
-    def trim_read_primers(s):
-        '''Trim primers from an individual read
-
-        Args:
-            ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
-        '''
-        # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
-        overlapping_primer_inds_start = overlapping_primers[s.reference_start]
-        overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
-
-        # no primers covered start of alignment, so don't try to primer trim
-        if len(overlapping_primer_inds_start) == 0:
-            return
-
-    # nested function: quality trim an individual read
-    def trim_read_quality(s):
-        '''Quality trim an individual read
-
-        Args:
-            ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
-        '''
-        pass # TODO IMPLEMENT
-
     # trim reads
     print_log("Trimming reads...")
-    for s in in_aln:
+    for s_i, s in enumerate(in_aln):
         # skip unmapped reads
         if s.is_unmapped:
             NUM_UNMAPPED += 1; continue
@@ -317,7 +318,14 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
             NUM_NO_CIGAR += 1; continue
 
         # trim this read and write the result
-        trim_read_primers(s); trim_read_quality(s); out_aln.write(s)
+        trim_read_primers(s, overlapping_primers)
+        trim_read_quality(s)
+        out_aln.write(s)
+
+        # print progress update
+        if s_i % PROGRESS_NUM_READS == 0:
+            print_log("Trimmed %d reads..." % s_i)
+    print_log("Finished trimming %d reads" % s_i)
 
 	# TODO DELETE WHEN DONE
     error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- primer_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, primer_fn, trimmed_reads_fn)) # TODO
