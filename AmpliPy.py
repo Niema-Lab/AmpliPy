@@ -392,6 +392,9 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
         # update our alignment accordingly
         s.cigartuples = list(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
+    # quality trim (all reads)
+    pass # TODO
+
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
     '''Run AmpliPy Trim
