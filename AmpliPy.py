@@ -7,11 +7,11 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 import argparse
 import gzip
 import pickle
-import pysam
 #from trim import trim
 from collections import deque
 from datetime import datetime
 from os.path import isfile
+from pysam import AlignmentFile
 from sys import argv, stderr
 
 # constants
@@ -25,6 +25,7 @@ ERROR_TEXT_FILE_NOT_FOUND = "File not found"
 ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION = "Invalid AmpliPy index file extension (should be .pkl or .pkl.gz)"
 ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
+ERROR_TEXT_INVALID_READ_EXTENSION = "Invalid read mapping extension (should be .sam or .bam)"
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
@@ -210,6 +211,18 @@ def run_index(primer_fn, reference_fn, amplipy_index_fn):
     print_log("AmpliPy index successfully written to file: %s" % amplipy_index_fn)
     return amplipy_index_tuple
 
+# trim an individual read
+def trim_read(s):
+    '''Trim an individual read
+
+    Args:
+        ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+
+    Returns:
+        ``pysam.AlignedSegment``: The trimmed read
+    '''
+    exit(1) # TODO
+
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
     '''Run AmpliPy Trim
@@ -237,7 +250,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
 
         ``include_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
     '''
-    # set things up
+    # load input files and preprocess
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
     print_log("Loading reference genome: %s" % reference_fn)
     ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
@@ -245,6 +258,40 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     primers = load_primers(primer_fn)
     print_log("Precalculate overlapping primers...")
     overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
+
+    # initialize counters
+    NUM_UNMAPPED = 0
+
+    # create pysam object for input file
+    print_log("Opening input untrimmed SAM/BAM for reading: %s" % untrimmed_reads_fn)
+    if untrimmed_reads_fn.lower() == 'stdin':
+        in_aln = AlignmentFile('-', 'r') # standard input --> SAM
+    elif not isfile(untrimmed_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, untrimmed_reads_fn))
+    elif untrimmed_reads_fn.lower().endswith('.sam'):
+        in_aln = AlignmentFile(untrimmed_reads_fn, 'r')
+    elif untrimmed_reads_fn.lower().endswith('.bam'):
+        in_aln = AlignmentFile(untrimmed_reads_fn, 'rb')
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, untrimmed_reads_fn))
+
+    # create pysam object for output file
+    print_log("Opening output SAM/BAM for writing trimmed reads: %s" % trimmed_reads_fn)
+    if trimmed_reads_fn.lower() == 'stdout':
+        out_aln = AlignmentFile('-', 'w', template=in_aln) # standard output --> SAM
+    elif isfile(trimmed_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, trimmed_reads_fn))
+    elif trimmed_reads_fn.lower().endswith('.sam'):
+        out_aln = AlignmentFile(trimmed_reads_fn, 'w', template=in_aln)
+    elif trimmed_reads_fn.lower().endswith('.bam'):
+        out_aln = AlignmentFile(trimmed_reads_fn, 'wb', template=in_aln)
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, trimmed_reads_fn))
+
+    # trim reads
+    print_log("Trimming reads...")
+    for s in in_aln:
+        out_aln.write(trim_read(s))
 
 	# TODO DELETE WHEN DONE
     error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- primer_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, primer_fn, trimmed_reads_fn)) # TODO
