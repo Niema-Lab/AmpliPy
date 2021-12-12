@@ -305,32 +305,42 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
     overlapping_primer_inds_start = overlapping_primers[s.reference_start]
     overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
+    #print("NIEMA: START = %s and END = %s" % ([primers[i] for i in overlapping_primer_inds_start], [primers[i] for i in overlapping_primer_inds_end]))
     isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
+    #print("NIEMA: ISIZE = %s" % isize_flag)
 
-    # trim forward primer (paired reads: just forward; unpaired reads: all)
-    if len(overlapping_primer_inds_start) > 0 and ((s.is_paired and not s.is_reverse) or not s.is_paired):
+    # trim forward primer
+    if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
         # prepare to trim forward primer
-        max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) + 1 # just after max end of overlapping primers
+        max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
         delete_start = ref_pos_to_query_pos(s, max_overlap_end, mode=1)
+        #print("NIEMA: DELETE START = %s" % delete_start)
         new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
 
         # for each operation in the CIGAR
-        for cig, n in s.cigartuples:
-            # if nothing left to delete, just append everything
-            if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
-                pos_start = True; new_cigar.append((cig,n)); continue
+        for operation in s.cigartuples:
+            # If we have nothing left to delete, just append everything; otherwise, separate tuple for convenience
+            if del_len == 0 and pos_start:
+                new_cigar.append(operation); continue
+            cig, n = operation
+            
+            # If we have nothing left to delete and are consuming both, we want to just append everything
+            if del_len == 0 and CONSUME_QUERY[cig] and CONSUME_REF[cig]:
+                pos_start = True; new_cigar.append(operation); continue
 
-            # if our operation consumes the query
+            # How much our current trim affects our read's start position
             ref_add = 0
+
+            # If our operation consumes the query
             if CONSUME_QUERY[cig]:
                 # How much do we have to delete?
-                if del_len >= n: # our entire operation needs to be deleted
-                    new_cigar.append((BAM_CSOFT_CLIP,n))
-                elif 0 < del_len < n: # We need to delete SOME of our segment, but we still have more later
-                    new_cigar.append((BAM_CSOFT_CLIP,del_len))
-                elif del_len == 0: # Just keep clipping
-                    new_cigar.append((BAM_CSOFT_CLIP,n)); continue
-
+                if del_len >= n: # Our entire operation needs to be deleted
+                    new_cigar.append((BAM_CSOFT_CLIP, n))
+                elif 0 < del_len < n: # We need to delete some of our segment, but we will still have more later
+                    new_cigar.append((BAM_CSOFT_CLIP, del_len))
+                else: # Since we consume the query, we just need to keep clipping
+                    new_cigar.append((BAM_CSOFT_CLIP, n)); continue
+                
                 # Update based on how much we just deleted
                 ref_add = min(del_len, n)
                 tmp = n
@@ -339,21 +349,28 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
 
                 # If there is still more left to do, append it
                 if n > 0:
-                    new_cigar.append((cig,n))
+                    new_cigar.append((cig, n))
 
-                # If we are done and just consumed, we want to just start appending everything
+                # If we are done and just consumed, we want to just start appending everything.
                 if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
                     pos_start = True
 
-            # If our trim consumed the reference, we need to move our read's start position forward
+            # If our trim consumed the reference, we need to move our read's start position forwards
             if CONSUME_REF[cig]:
                 start_pos += ref_add
 
         # update our alignment accordingly
-        s.cigartuples = new_cigar
+        proper_cigar = list()
+        for i in range(len(new_cigar)):
+            if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
+                new_cigar[i+1] = (new_cigar[i+1][0], new_cigar[i][1] + new_cigar[i+1][1]); continue
+            proper_cigar.append(new_cigar[i])
+        print("NIEMA: NEW = %s" % new_cigar)
+        print("NIEMA: PROPER = %s" % proper_cigar)
+        s.cigartuples = proper_cigar
         s.reference_start += start_pos
 
-    # trim reverse primer (paired reads: just reverse; unpaired reads: all)
+    # trim reverse primer TODO
     if len(overlapping_primer_inds_end) > 0 and ((s.is_paired and s.is_reverse) or not s.is_paired):
         # prepare to trim reverse primer
         min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 1 # just before min start of overlapping primers
