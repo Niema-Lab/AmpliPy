@@ -305,16 +305,13 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
     overlapping_primer_inds_start = overlapping_primers[s.reference_start]
     overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
-    #print("NIEMA: START = %s and END = %s" % ([primers[i] for i in overlapping_primer_inds_start], [primers[i] for i in overlapping_primer_inds_end]))
     isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
-    #print("NIEMA: ISIZE = %s" % isize_flag)
 
     # trim forward primer
     if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
         # prepare to trim forward primer
         max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
         delete_start = ref_pos_to_query_pos(s, max_overlap_end, mode=1)
-        #print("NIEMA: DELETE START = %s" % delete_start)
         new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
 
         # for each operation in the CIGAR
@@ -365,8 +362,6 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
             if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
                 new_cigar[i+1] = (new_cigar[i+1][0], new_cigar[i][1] + new_cigar[i+1][1]); continue
             proper_cigar.append(new_cigar[i])
-        print("NIEMA: NEW = %s" % new_cigar)
-        print("NIEMA: PROPER = %s" % proper_cigar)
         s.cigartuples = proper_cigar
         s.reference_start += start_pos
 
