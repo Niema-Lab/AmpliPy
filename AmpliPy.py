@@ -623,7 +623,7 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         print_log("Loading primers: %s" % primer_fn)
         primers = load_primers(primer_fn)
         max_primer_len = max(end-start for start,end in primers)
-        print_log("Precalculate overlapping primers...")
+        print_log("Precalculating overlapping primers...")
         min_primer_start, max_primer_end = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
     if run_trim:
         print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
@@ -636,15 +636,16 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
     # initialize counters
     NUM_UNMAPPED = 0
     NUM_NO_CIGAR = 0
-    NUM_TRIMMED_PRIMER_START = 0
-    NUM_TRIMMED_PRIMER_END = 0
-    NUM_UNTRIMMED_PRIMER = 0
-    NUM_TRIMMED_QUALITY = 0
-    NUM_TOO_SHORT = 0
-    NUM_WRITTEN = 0
+    if run_trim:
+        NUM_TRIMMED_PRIMER_START = 0
+        NUM_TRIMMED_PRIMER_END = 0
+        NUM_UNTRIMMED_PRIMER = 0
+        NUM_TRIMMED_QUALITY = 0
+        NUM_TOO_SHORT = 0
+        NUM_WRITTEN = 0
 
-    # trim reads
-    print_log("Trimming reads...")
+    # process reads
+    print_log("Processing reads...")
     s_i = 0
     for s in in_aln:
         # skip unmapped reads
@@ -656,13 +657,14 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
             NUM_NO_CIGAR += 1; continue
 
         # trim this read
-        trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
-        if trimmed_primer_start:
-            NUM_TRIMMED_PRIMER_START += 1
-        if trimmed_primer_end:
-            NUM_TRIMMED_PRIMER_END += 1
-        if trimmed_quality:
-            NUM_TRIMMED_QUALITY += 1
+        if run_trim:
+            trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
+            if trimmed_primer_start:
+                NUM_TRIMMED_PRIMER_START += 1
+            if trimmed_primer_end:
+                NUM_TRIMMED_PRIMER_END += 1
+            if trimmed_quality:
+                NUM_TRIMMED_QUALITY += 1
 
         # write this read (if applicable)
         write_read = True
@@ -678,14 +680,17 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         # print progress update
         s_i += 1
         if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Trimmed %d reads..." % s_i)
-    print_log("Finished trimming %d reads" % s_i)
+            print_log("Processed %d reads..." % s_i)
+
+    # finish up
+    print_log("Finished Processing %d reads" % s_i)
     print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
     print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
-    print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
-    print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
-    print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
-    print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
+    if run_trim:
+        print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
+        print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
+        print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
+        print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
     print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
 
 # run AmpliPy Variants
