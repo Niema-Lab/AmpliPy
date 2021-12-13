@@ -455,13 +455,13 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
         # update our alignment accordingly
         s.cigartuples = list(reversed(fix_cigar(new_cigar))) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
+    # set things up for quality trimming
+    qual = s.query_alignment_qualities
+    total = 0; true_start = 0; true_end = len(qual)
+    window = min(sliding_window_width, len(qual))
+
     # quality trim (reverse strand, so trim from beginning)
     if s.is_reverse:
-        # set things up
-        qual = s.query_alignment_qualities
-        total = 0; true_start = 0; true_end = len(qual)
-        window = sliding_window_width if sliding_window_width <= len(qual) else len(qual)
-
         # build our buffer
         i = true_end
         for offset in range(1, window):
