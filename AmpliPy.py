@@ -694,6 +694,11 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
     print_log("Processing reads...")
     s_i = 0
     for s in in_aln:
+        # print progress update
+        s_i += 1
+        if s_i % PROGRESS_NUM_READS == 0:
+            print_log("Processed %d reads..." % s_i)
+
         # skip unmapped reads
         if s.is_unmapped:
             NUM_UNMAPPED += 1; continue
@@ -768,11 +773,6 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
                 # match/mismatch
                 else:
                     symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
-
-        # print progress update
-        s_i += 1
-        if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Processed %d reads..." % s_i)
 
     # call variants (if applicable)
     if run_variants:
