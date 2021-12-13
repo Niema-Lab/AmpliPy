@@ -284,13 +284,15 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
             if r_pos >= ref_pos:
                 return q_pos
     elif mode == 2:
-        prev_r_pos = None
+        prev_q = None; prev_r = None
         for q_pos, r_pos in aligned_pair_iter:
-            if r_pos >= ref_pos:
-                if prev_r_pos is None:
-                    error("prev_r_pos is None")
-                return prev_r_pos
-            prev_r_pos = r_pos
+            if r_pos == ref_pos:
+                return q_pos
+            elif r_pos > ref_pos:
+                if prev_q is None:
+                    error("prev is None")
+                return prev_q
+            prev_q = q_pos; prev_r = r_pos
     else:
         error("Invalid mode: %s" % mode)
     error("Reference position did not map to query position: %d\n%s" % (ref_pos, str(s.get_aligned_pairs(matches_only=True))))
@@ -316,7 +318,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
     overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
     isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
 
-    # trim forward primer
+    # trim primer from start of read
     if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
         # prepare to trim forward primer
         max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
@@ -369,44 +371,49 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
         s.cigartuples = fix_cigar(new_cigar)
         s.reference_start += start_pos
 
-    # trim reverse primer TODO
-    if len(overlapping_primer_inds_end) > 0 and ((s.is_paired and s.is_reverse) or not s.is_paired):
+    # trim primer from end of read
+    if not (s.is_paired and isize_flag and not s.is_reverse) and len(overlapping_primer_inds_end) > 0:
         # prepare to trim reverse primer
-        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 1 # just before min start of overlapping primers
-        delete_end = ref_pos_to_query_pos(s, min_overlap_start, mode=2)
+        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 2 # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
+        delete_end = s.query_alignment_length - ref_pos_to_query_pos(s, min_overlap_start, mode=2)
         new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
         # for each operation in the CIGAR (reverse order because reverse primer)
-        for cig, n in reversed(s.cigartuples):
+        for operation in reversed(s.cigartuples):
             # if nothing left to delete, just append everything
-            if del_len == 0 and (pos_start or (CONSUME_QUERY[cig] and CONSUME_REF[cig])):
-                pos_start = True; new_cigar.append((cig,n)); continue
+            if del_len == 0 and pos_start:
+                new_cigar.append((operation)); continue
+            cig, n = operation
+            
+            # If we have nothing left to delete and are consuming both, we want to just append everything
+            if del_len == 0 and CONSUME_QUERY[cig] and CONSUME_REF[cig]:
+                pos_start = True; new_cigar.append(operation); continue
 
-            # if our operation consumes the query
+            # If our operation consumes the query
             if CONSUME_QUERY[cig]:
                 # How much do we have to delete?
-                if del_len >= n: # our entire operation needs to be deleted
-                    new_cigar.append((BAM_CSOFT_CLIP,n))
-                elif 0 < del_len < n: # We need to delete SOME of our segment, but we still have more later
-                    new_cigar.append((BAM_CSOFT_CLIP,del_len))
-                elif del_len == 0: # Just keep clipping
-                    new_cigar.append((BAM_CSOFT_CLIP,n)); continue
+                if del_len >= n: # Our entire operation needs to be deleted
+                    new_cigar.append((BAM_CSOFT_CLIP, n))
+                elif 0 < del_len < n: # We need to delete some of our segment, but we will still have more later
+                    new_cigar.append((BAM_CSOFT_CLIP, del_len))
+                else: # Since we consume the query, we just need to keep clipping
+                    new_cigar.append((BAM_CSOFT_CLIP, n)); continue
 
-                # Update based on how much we just deleted
-                tmp = n
-                n = max(del_len - tmp, 0)
-                del_len = max(del_len - tmp, 0)
+            # Update based on how much we just deleted
+            tmp = n
+            n = max(n - del_len, 0)
+            del_len = max(del_len - tmp, 0)
 
-                # If there is still more left to do, append it
-                if n > 0:
-                    new_cigar.append((cig,n))
+            # If there is still more left to do, append it
+            if n > 0:
+                new_cigar.append((cig, n))
 
-                # If we are done and just consumed, we want to just start appending everything
-                if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
-                    pos_start = True
+            # If we are done and just consumed, we want to just start appending everything.
+            if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
+                pos_start = True
 
         # update our alignment accordingly
-        s.cigartuples = list(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
+        s.cigartuples = list(reversed(fix_cigar(new_cigar))) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
     # quality trim (all reads)
     pass # TODO
