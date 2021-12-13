@@ -295,6 +295,15 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
         error("Invalid mode: %s" % mode)
     error("Reference position did not map to query position: %d\n%s" % (ref_pos, str(s.get_aligned_pairs(matches_only=True))))
 
+# fix new CIGAR after trimming
+def fix_cigar(new_cigar):
+    proper_cigar = list()
+    for i in range(len(new_cigar)):
+        if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
+            new_cigar[i+1] = (new_cigar[i+1][0], new_cigar[i][1] + new_cigar[i+1][1]); continue
+        proper_cigar.append(new_cigar[i])
+    return proper_cigar
+
 # trim a single read
 def trim_read(s, overlapping_primers, primers, max_primer_len):
     '''Primer-trim and quality-trim an individual read. In the future, for multiprocessing, I can just change ``s`` argument to be the relevant member variables (e.g. reference_start, reference_end, query_length, is_paired, is_reverse, etc.) and just return the final updated pysam cigartuples (list of tuples)
@@ -357,12 +366,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
                 start_pos += ref_add
 
         # update our alignment accordingly
-        proper_cigar = list()
-        for i in range(len(new_cigar)):
-            if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
-                new_cigar[i+1] = (new_cigar[i+1][0], new_cigar[i][1] + new_cigar[i+1][1]); continue
-            proper_cigar.append(new_cigar[i])
-        s.cigartuples = proper_cigar
+        s.cigartuples = fix_cigar(new_cigar)
         s.reference_start += start_pos
 
     # trim reverse primer TODO
