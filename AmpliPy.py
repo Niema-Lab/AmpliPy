@@ -266,11 +266,7 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     pysam.set_verbosity(tmp) # re-enable htslib verbosity
     return in_aln, out_aln
 
-# NOTE TO NIEMA: I think these cigar_to_* and get_pos_on_* functions can be sped up by using functions in pysam.AlignedSegment
-
-# get reference length from CIGAR
-def cigar_to_ref_length(cigar):
-    return sum(n for cig,n in cigar if CONSUME_REF[cig])
+# NOTE TO NIEMA: I think these get_pos_on_* functions can be sped up by using functions in pysam.AlignedSegment
 
 # get query position on reference
 def get_pos_on_ref(cigar, query_pos, ref_start):
@@ -670,7 +666,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
 
         # write this read (if applicable)
         write_read = True
-        if cigar_to_ref_length(s.cigartuples) < min_length:
+        if s.reference_length < min_length:
             NUM_TOO_SHORT += 1; write_read = False
         if not (trimmed_primer_start or trimmed_primer_end):
             NUM_UNTRIMMED_PRIMER += 1
