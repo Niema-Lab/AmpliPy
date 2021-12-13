@@ -558,13 +558,9 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
     return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
-# run AmpliPy Trim
-def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
-    '''Run AmpliPy Trim
-
-    * This is where iVar's code does iVar Trim:  https://github.com/TheCrossBoy/ivar/blob/2829ebf359fab633bac5e9f4d19c9c42746629fd/src/trim_primer_quality.cpp#L559-L928
-    * This is where it does the actual trimming: https://github.com/TheCrossBoy/ivar/blob/2829ebf359fab633bac5e9f4d19c9c42746629fd/src/trim_primer_quality.cpp#L696-L857
-
+# run AmpliPy
+def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trimmed_reads_fn=None, primer_pos_offset=None, min_length=None, min_quality=None, sliding_window_width=None, include_no_primer=None, run_trim=False, run_variants=False, run_consensus=False):
+    '''Run AmpliPy
 
     Args:
         ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
@@ -584,6 +580,12 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
         ``sliding_window_width`` (``int``): Width of sliding window
 
         ``include_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
+
+        ``run_trim`` (``bool``): ``True`` to trim reads, otherwise ``False``
+
+        ``run_variants`` (``bool``): ``True`` to call variants, otherwise ``False``
+
+        ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
     '''
     # load input files and preprocess
     print_log("Executing AmpliPy Trim (v%s)" % VERSION)
@@ -681,33 +683,26 @@ def run_consensus(trimmed_reads_fn, consensus_fn):
     print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
     error("CONSENSUS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- consensus_fn: %s" % (trimmed_reads_fn, consensus_fn)) # TODO
 
-# run AmpliPy AIO (All-In-One)
-def run_aio(untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn):
-    '''Run AmpliPy AIO (All-In-One)
-
-    Args:
-        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
-
-        ``primer_fn`` (``str``): Filename of input primer BED
-
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
-
-        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
-
-        ``variants_fn`` (``str``): Filename of output variants VCF
-
-        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
-    '''
-    print_log("Executing AmpliPy AIO (v%s)" % VERSION)
-    error("AIO NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- amplipy_index_fn: %s\n- trimmed_reads_fn: %s\n- variants_fn: %s\n- consensus_fn: %s" % (untrimmed_reads_fn, amplipy_index_fn, trimmed_reads_fn, variants_fn, consensus_fn)) # TODO
-
 # main content
 if __name__ == "__main__":
     if len(argv) == 1:
         pass # TODO: In the future, run GUI here to fill in argv accordingly (so argparse will run fine)
     args = parse_args()
     if args.command == 'trim':
-        run_trim(args.input, args.primer, args.reference, args.output, args.primer_pos_offset, args.min_length, args.min_quality, args.sliding_window_width, args.include_no_primer)
+        run_amplipy(
+            untrimmed_reads_fn = args.input,
+            primer_fn = args.primer,
+            reference_fn = args.reference,
+            trimmed_reads_fn = args.output,
+            primer_pos_offset = args.primer_pos_offset,
+            min_length = args.min_length,
+            min_quality = args.min_quality,
+            sliding_window_width = args.sliding_window_width,
+            include_no_primer = args.include_no_primer,
+            run_trim = True,
+            run_variants = False,
+            run_consensus = False,
+        )
     elif args.command == 'variants':
         run_variants(args.input, args.output)
     elif args.command == 'consensus':
