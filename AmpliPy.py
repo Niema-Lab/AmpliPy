@@ -19,10 +19,15 @@ BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
 
 # default arguments
+DEFAULT_MIN_DEPTH_CONSENSUS = 10
+DEFAULT_MIN_DEPTH_VARIANTS = 0
+DEFAULT_MIN_FREQ_CONSENSUS = 0
+DEFAULT_MIN_FREQ_VARIANTS = 0.03
 DEFAULT_MIN_LENGTH = 30
 DEFAULT_MIN_QUALITY = 20
 DEFAULT_PRIMER_POS_OFFSET = 0
 DEFAULT_SLIDING_WINDOW_WIDTH = 4
+DEFAULT_UNKNOWN_SYMBOL = 'N'
 
 # CIGAR operations
 CIGAR = ['BAM_CMATCH', 'BAM_CINS', 'BAM_CDEL', 'BAM_CREF_SKIP', 'BAM_CSOFT_CLIP', 'BAM_CHARD_CLIP', 'BAM_CPAD', 'BAM_CEQUAL', 'BAM_CDIFF', 'BAM_CBACK']
@@ -49,15 +54,20 @@ ERROR_TEXT_INVALID_VCF_EXTENSION = "Invalid variants extension (should be .vcf, 
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
+HELP_TEXT_MIN_DEPTH_CONSENSUS = "Minimum depth to call consensus"
+HELP_TEXT_MIN_DEPTH_VARIANTS = "Minimum depth to call variant"
+HELP_TEXT_MIN_FREQ_CONSENSUS = "Minimum frequency threshold (0-1) to call consensus"
+HELP_TEXT_MIN_FREQ_VARIANTS = "Minimum frequency threshold (0-1) to call variant"
+HELP_TEXT_MIN_QUAL = "Minimum quality threshold"
 HELP_TEXT_PRIMER = "Primer File (BED)"
 HELP_TEXT_READS_UNTRIMMED = "Untrimmed Reads (SAM/BAM)"
 HELP_TEXT_READS_TRIMMED = "Trimmed Reads (SAM/BAM)"
 HELP_TEXT_REFERENCE = "Reference Genome (FASTA)"
 HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER = "Include reads with no primers"
 HELP_TEXT_TRIM_MIN_LENGTH = "Minimum length of read to retain after trimming"
-HELP_TEXT_TRIM_MIN_QUAL = "Minimum quality threshold for sliding window to pass"
 HELP_TEXT_TRIM_PRIMER_POS_OFFSET = "Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed"
-HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH = "Width of sliding window"
+HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH = "Width of sliding window (average quality of this window must be >= minimum quality threshold)"
+HELP_TEXT_UNKNOWN_SYMBOL = "Character to print in regions with less than minimum coverage"
 HELP_TEXT_VARIANTS = "Variant Calls (VCF)"
 
 # print log
@@ -87,8 +97,8 @@ def parse_args():
     trim_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     trim_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_READS_TRIMMED)
     trim_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=DEFAULT_PRIMER_POS_OFFSET, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
-    trim_parser.add_argument('-m', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
-    trim_parser.add_argument('-q', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_TRIM_MIN_QUAL)
+    trim_parser.add_argument('-ml', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
+    trim_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
     trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=DEFAULT_SLIDING_WINDOW_WIDTH, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
     trim_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
@@ -97,12 +107,19 @@ def parse_args():
     variants_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
     variants_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     variants_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_VARIANTS)
+    variants_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
+    variants_parser.add_argument('-mf', '--min_freq', required=False, type=float, default=DEFAULT_MIN_FREQ_VARIANTS, help=HELP_TEXT_MIN_FREQ_VARIANTS)
+    variants_parser.add_argument('-md', '--min_depth', required=False, type=int, default=DEFAULT_MIN_DEPTH_VARIANTS, help=HELP_TEXT_MIN_DEPTH_VARIANTS)
 
     # AmpliPy Consensus args
     consensus_parser = subparsers.add_parser("consensus", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     consensus_parser.add_argument('-i', '--input', required=False, type=str, default='stdin', help=HELP_TEXT_READS_TRIMMED)
     consensus_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     consensus_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_CONSENSUS)
+    consensus_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
+    consensus_parser.add_argument('-mf', '--min_freq', required=False, type=float, default=DEFAULT_MIN_FREQ_CONSENSUS, help=HELP_TEXT_MIN_FREQ_CONSENSUS)
+    consensus_parser.add_argument('-md', '--min_depth', required=False, type=int, default=DEFAULT_MIN_DEPTH_CONSENSUS, help=HELP_TEXT_MIN_DEPTH_CONSENSUS)
+    consensus_parser.add_argument('-n', '--unknown_symbol', required=False, type=str, default=DEFAULT_UNKNOWN_SYMBOL, help=HELP_TEXT_UNKNOWN_SYMBOL)
 
     # AmpliPy AIO (All-In-One) args
     aio_parser = subparsers.add_parser("aio", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -113,9 +130,14 @@ def parse_args():
     aio_parser.add_argument('-ov', '--output_variants', required=True, type=str, help=HELP_TEXT_VARIANTS)
     aio_parser.add_argument('-oc', '--output_consensus', required=True, type=str, help=HELP_TEXT_CONSENSUS)
     aio_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=DEFAULT_PRIMER_POS_OFFSET, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
-    aio_parser.add_argument('-m', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
-    aio_parser.add_argument('-q', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_TRIM_MIN_QUAL)
+    aio_parser.add_argument('-ml', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
+    aio_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
     aio_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=DEFAULT_SLIDING_WINDOW_WIDTH, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
+    aio_parser.add_argument('-mfc', '--min_freq_consensus', required=False, type=float, default=DEFAULT_MIN_FREQ_CONSENSUS, help=HELP_TEXT_MIN_FREQ_CONSENSUS)
+    aio_parser.add_argument('-mfv', '--min_freq_variants', required=False, type=float, default=DEFAULT_MIN_FREQ_VARIANTS, help=HELP_TEXT_MIN_FREQ_VARIANTS)
+    aio_parser.add_argument('-mdc', '--min_depth_consensus', required=False, type=int, default=DEFAULT_MIN_DEPTH_CONSENSUS, help=HELP_TEXT_MIN_DEPTH_CONSENSUS)
+    aio_parser.add_argument('-mdv', '--min_depth_variants', required=False, type=int, default=DEFAULT_MIN_DEPTH_VARIANTS, help=HELP_TEXT_MIN_DEPTH_VARIANTS)
+    aio_parser.add_argument('-n', '--unknown_symbol', required=False, type=str, default=DEFAULT_UNKNOWN_SYMBOL, help=HELP_TEXT_UNKNOWN_SYMBOL)
     aio_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
     # parse args and return
