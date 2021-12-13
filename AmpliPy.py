@@ -196,44 +196,71 @@ def load_primers(primer_fn):
     return primers
 
 # create AlignmentFile objects for SAM/BAM input and output files
-def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
+def create_AlignmentFile_objects(input_reads_fn=None, output_reads_fn=None):
     '''Create ``pysam.AlignmentFile`` objects for the input and output SAM/BAM files
 
     Args:
-        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
+        ``input_reads_fn`` (``str``): Filename of input reads SAM/BAM
 
-        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+        ``output_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
 
     Returns:
-        ``pysam.AlignmentFile``: Stream for reading input untrimmed reads SAM/BAM
+        ``pysam.AlignmentFile``: Stream for reading input reads SAM/BAM
 
         ``pysam.AlignmentFile``: Stream for writing output trimmed reads SAM/BAM
     '''
-    tmp = pysam.set_verbosity(0) # disable htslib verbosity to avoid "no index file" warning
-    if untrimmed_reads_fn.lower() == 'stdin':
-        in_aln = pysam.AlignmentFile('-', 'r') # standard input --> SAM
-    elif not isfile(untrimmed_reads_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, untrimmed_reads_fn))
-    elif untrimmed_reads_fn.lower().endswith('.sam'):
-        in_aln = pysam.AlignmentFile(untrimmed_reads_fn, 'r')
-    elif untrimmed_reads_fn.lower().endswith('.bam'):
-        in_aln = pysam.AlignmentFile(untrimmed_reads_fn, 'rb')
-    else:
-        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, untrimmed_reads_fn))
-    if trimmed_reads_fn.lower() == 'stdout':
-        out_aln = pysam.AlignmentFile('-', 'w', template=in_aln) # standard output --> SAM
-    elif isfile(trimmed_reads_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, trimmed_reads_fn))
-    elif trimmed_reads_fn.lower().endswith('.sam'):
-        out_aln = pysam.AlignmentFile(trimmed_reads_fn, 'w', template=in_aln)
-    elif trimmed_reads_fn.lower().endswith('.bam'):
-        out_aln = pysam.AlignmentFile(trimmed_reads_fn, 'wb', template=in_aln)
-    else:
-        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, trimmed_reads_fn))
-    pysam.set_verbosity(tmp) # re-enable htslib verbosity
-    return in_aln, out_aln
+    # disable htslib verbosity to avoid "no index file" warning
+    tmp = pysam.set_verbosity(0)
 
-# NOTE TO NIEMA: I think these get_pos_on_* functions can be sped up by using functions in pysam.AlignedSegment
+    # open input SAM/BAM
+    if input_reads_fn is None:
+        in_aln = None
+    elif input_reads_fn.lower() == 'stdin':
+        in_aln = pysam.AlignmentFile('-', 'r') # standard input --> SAM
+    elif not isfile(input_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, input_reads_fn))
+    elif input_reads_fn.lower().endswith('.sam'):
+        in_aln = pysam.AlignmentFile(input_reads_fn, 'r')
+    elif input_reads_fn.lower().endswith('.bam'):
+        in_aln = pysam.AlignmentFile(input_reads_fn, 'rb')
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, input_reads_fn))
+
+    # prep output header (if applicable)
+    if in_aln is None:
+        error("Input alignment file is None")
+    elif output_reads_fn is not None:
+        header_dict = in_aln.header.to_dict()
+        curr_dict = {
+            'PN': 'AmpliPy',
+            'PP': header_dict['PG'][-1]['ID'],
+            'VN': VERSION,
+            'CL': ' '.join(argv),
+        }
+        num_existing_amplipy = sum(item['PN'] == 'AmpliPy' for item in header_dict['PG'])
+        if num_existing_amplipy == 0:
+            curr_dict['ID'] = 'AmpliPy'
+        else:
+            curr_dict['ID'] = 'AmpliPy.%d' % num_existing_amplipy
+        header_dict['PG'].append(curr_dict)
+
+    # open output SAM/BAM (if applicable)
+    if output_reads_fn is None:
+        out_aln = None
+    elif output_reads_fn.lower() == 'stdout':
+        out_aln = pysam.AlignmentFile('-', 'w', header=header_dict) # standard output --> SAM
+    elif isfile(output_reads_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, output_reads_fn))
+    elif output_reads_fn.lower().endswith('.sam'):
+        out_aln = pysam.AlignmentFile(output_reads_fn, 'w', header=header_dict)
+    elif output_reads_fn.lower().endswith('.bam'):
+        out_aln = pysam.AlignmentFile(output_reads_fn, 'wb', header=header_dict)
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_READ_EXTENSION, output_reads_fn))
+
+    # re-enable htslib verbosity and finish up
+    pysam.set_verbosity(tmp)
+    return in_aln, out_aln
 
 # get query position on reference
 def get_pos_on_ref(cigar, query_pos, ref_start):
@@ -588,17 +615,23 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
     '''
     # load input files and preprocess
-    print_log("Executing AmpliPy Trim (v%s)" % VERSION)
-    print_log("Loading reference genome: %s" % reference_fn)
-    ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
-    print_log("Loading primers: %s" % primer_fn)
-    primers = load_primers(primer_fn)
-    max_primer_len = max(end-start for start,end in primers)
-    print_log("Precalculate overlapping primers...")
-    min_primer_start, max_primer_end = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
-    print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
-    print_log("Output untrimmed SAM/BAM: %s" % trimmed_reads_fn)
-    in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
+    print_log("Executing AmpliPy (v%s)" % VERSION)
+    if reference_fn is not None:
+        print_log("Loading reference genome: %s" % reference_fn)
+        ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
+    if primer_fn is not None:
+        print_log("Loading primers: %s" % primer_fn)
+        primers = load_primers(primer_fn)
+        max_primer_len = max(end-start for start,end in primers)
+        print_log("Precalculate overlapping primers...")
+        min_primer_start, max_primer_end = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
+    if run_trim:
+        print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
+        print_log("Output trimmed SAM/BAM: %s" % trimmed_reads_fn)
+        in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
+    else:
+        print_log("Input trimmed SAM/BAM: %s" % trimmed_reads_fn)
+        in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
 
     # initialize counters
     NUM_UNMAPPED = 0
