@@ -36,7 +36,6 @@ CONSUME_REF   = [True, False, True,  True,  False, False, False, True, True] # C
 ERROR_TEXT_EMPTY_BED = "Empty BED file"
 ERROR_TEXT_FILE_EXISTS = "File already exists"
 ERROR_TEXT_FILE_NOT_FOUND = "File not found"
-ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION = "Invalid AmpliPy index file extension (should be .pkl or .pkl.gz)"
 ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
 ERROR_TEXT_INVALID_READ_EXTENSION = "Invalid read mapping extension (should be .sam or .bam)"
@@ -112,7 +111,7 @@ def parse_args():
 
 # find overlapping primers
 def find_overlapping_primers(ref_genome_length, primers, primer_pos_offset):
-    '''Find all primers that cover every index of the reference genome
+    '''Find all primers that cover every position of the reference genome
 
     Args:
         ``ref_genome_length`` (``int``): Length of the reference genome
@@ -122,10 +121,13 @@ def find_overlapping_primers(ref_genome_length, primers, primer_pos_offset):
         ``primer_pos_offset`` (``int``): Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
 
     Returns:
-        ``list`` of ``list`` of ``int``: Let ``overlapping_primers`` denote the return value. For each position ``ref_pos`` of the reference genome, ``overlapping_primers[ref_pos]`` is a list of all primers (represented as their index in ``primers``) that cover ``ref_pos``.
+        ``list`` of ``int``: The minimum start position (inclusive) of all primers that cover each position of the reference genome
+
+        ``list`` of ``int``: The maximum end position (exclusive) of all primers that cover each position of the reference genome
     '''
     # set things up
-    overlapping_primers = [list() for _ in range(ref_genome_length)]
+    min_primer_start = [None for _ in range(ref_genome_length)]
+    max_primer_end = [None for _ in range(ref_genome_length)]
     num_primers = len(primers); curr_primers = deque(); i = 0 # i = current index of primers; primers[i] is the "current" (start,end) tuple
 
     # compute overlapping primers for each position of the reference genome
@@ -140,9 +142,10 @@ def find_overlapping_primers(ref_genome_length, primers, primer_pos_offset):
 
         # the primers in curr_primers must span ref_pos
         if len(curr_primers) != 0:
-            overlapping_primers[ref_pos] = list(curr_primers)
+            min_primer_start[ref_pos] = min(primers[i][0] for i in curr_primers)
+            max_primer_end[ref_pos] = max(primers[i][1] for i in curr_primers)
         ref_pos += 1
-    return overlapping_primers
+    return min_primer_start, max_primer_end
 
 # load reference genome
 def load_ref_genome(reference_fn):
@@ -191,42 +194,6 @@ def load_primers(primer_fn):
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
     primers.sort() # shouldn't be necessary (BED should be sorted), but just in case
     return primers
-
-# write AmpliPy index
-def write_amplipy_index(amplipy_index_fn, amplipy_index_tuple):
-    if not amplipy_index_fn.lower().endswith('.pkl') and not amplipy_index_fn.lower().endswith('.pkl.gz'):
-        error("%s: %s" % (ERROR_TEXT_INVALID_AMPLIPY_INDEX_EXTENSION, amplipy_index_fn))
-    if isfile(amplipy_index_fn):
-        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, amplipy_index_fn))
-    if amplipy_index_fn.lower().endswith('.gz'):
-        f = gzip.open(amplipy_index_fn, mode='wb', compresslevel=9)
-    else:
-        f = open(amplipy_index_fn, mode='wb', buffering=BUFSIZE)
-    pickle.dump(amplipy_index_tuple, f); f.close()
-
-# run AmpliPy Index
-def run_index(primer_fn, reference_fn, amplipy_index_fn):
-    '''Run AmpliPy Index
-
-    Args:
-        ``primer_fn`` (``str``): Filename of input primer BED
-
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA
-
-        ``amplipy_index_fn`` (``str``): Filename of output AmpliPy index PKL
-    '''
-    print_log("Executing AmpliPy Index (v%s)" % VERSION)
-    print_log("Loading reference genome: %s" % reference_fn)
-    ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
-    print_log("Loading primers: %s" % primer_fn)
-    primers = load_primers(primer_fn)
-    print_log("Indexing primers...")
-    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
-    print_log("Writing AmpliPy index to file...")
-    amplipy_index_tuple = (ref_genome_ID, ref_genome_sequence, primers, overlapping_primers)
-    write_amplipy_index(amplipy_index_fn, amplipy_index_tuple)
-    print_log("AmpliPy index successfully written to file: %s" % amplipy_index_fn)
-    return amplipy_index_tuple
 
 # create AlignmentFile objects for SAM/BAM input and output files
 def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
@@ -332,15 +299,15 @@ def fix_cigar(new_cigar):
     return proper_cigar
 
 # trim a single read
-def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width):
+def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width):
     '''Primer-trim and quality-trim an individual read. In the future, for multiprocessing, I can just change ``s`` argument to be the relevant member variables (e.g. reference_start, reference_end, query_length, is_paired, is_reverse, etc.) and just return the final updated pysam cigartuples (list of tuples)
 
     Args:
         ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
 
-        ``overlapping_primers`` (``list`` of ``list`` of ``int``): Preprocessed list of indices of primers that span each position of the reference genome
+        ``min_primer_start`` (``list`` of ``int``): The minimum start position (inclusive) of all primers that cover each position of the reference genome
 
-        ``primers`` (``list`` of ``tuple`` of ``int``): The primers as ``(start,end)`` tuples, where ``end`` is EXclusive
+        ``max_primer_end`` (``list`` of ``int``): The maximum end position (exclusive) of all primers that cover each position of the reference genome
 
         ``max_primer_len`` (``int``): Length of longest primer in ``primers``
 
@@ -356,8 +323,8 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
         ``bool``: ``True`` if quality trimming was done, otherwise ``False``
     '''
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
-    overlapping_primer_inds_start = overlapping_primers[s.reference_start]
-    overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
+    left_max_primer_end = max_primer_end[s.reference_start]
+    right_min_primer_start = min_primer_start[s.reference_end-1] # "reference_end points to one past the last aligned residue"
     isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
 
     # flags for what happened when trimming this read
@@ -366,11 +333,10 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
     trimmed_quality = False
 
     # trim primer from start of read
-    if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
+    if not (s.is_paired and isize_flag and s.is_reverse) and left_max_primer_end is not None:
         # prepare to trim forward primer
         trimmed_primer_start = True
-        max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
-        delete_start = get_pos_on_query(s.cigartuples, max_overlap_end + 1, s.reference_start)
+        delete_start = get_pos_on_query(s.cigartuples, left_max_primer_end + 1, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
 
         # for each operation in the CIGAR
@@ -420,11 +386,10 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
         s.reference_start += start_pos
 
     # trim primer from end of read
-    if not (s.is_paired and isize_flag and not s.is_reverse) and len(overlapping_primer_inds_end) > 0:
+    if not (s.is_paired and isize_flag and not s.is_reverse) and right_min_primer_start is not None:
         # prepare to trim reverse primer
         trimmed_primer_end = True
-        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
-        delete_end = s.query_length - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
+        delete_end = s.query_length - get_pos_on_query(s.cigartuples, right_min_primer_start, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
         # for each operation in the CIGAR (reverse order because reverse primer)
@@ -628,7 +593,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     primers = load_primers(primer_fn)
     max_primer_len = max(end-start for start,end in primers)
     print_log("Precalculate overlapping primers...")
-    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
+    min_primer_start, max_primer_end = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
     print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
     print_log("Output untrimmed SAM/BAM: %s" % trimmed_reads_fn)
     in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
@@ -656,7 +621,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
             NUM_NO_CIGAR += 1; continue
 
         # trim this read
-        trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width)
+        trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
         if trimmed_primer_start:
             NUM_TRIMMED_PRIMER_START += 1
         if trimmed_primer_end:
