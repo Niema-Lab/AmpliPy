@@ -266,79 +266,66 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     pysam.set_verbosity(tmp) # re-enable htslib verbosity
     return in_aln, out_aln
 
-# get the query position that mapped to a given reference position
-def ref_pos_to_query_pos(s, ref_pos, mode=0):
-    '''Given a reference position and a query alignment, find the position in the query that mapped to that reference position
+# get alignment length from CIGAR
+def cigar_to_qlen(cigar):
+    return sum(n for cig,n in cigar if CONSUME_QUERY[cig])
+
+# get query position on reference
+def get_pos_on_ref(cigar, query_pos, ref_start):
+    '''Convert a query position to a reference position
 
     Args:
-        ``s`` (``pysam.AlignedSegment``): The mapped read
-
-        ``ref_pos`` (``int``): The reference position
-
-        ``mode`` (``int``): How to handle if the reference position doesn't exactly match the query (e.g. deletion). 0 = must match ref_pos, 1 = match ref_pos or first position > ref_pos, 2 = match ref_pos or last position < ref_pos
-
-    Returns:
-        ``int``: The corresponding query position
-    '''
-    aligned_pair_iter = s.get_aligned_pairs(matches_only=True)
-    if mode == 0:
-        for q_pos, r_pos in aligned_pair_iter:
-            if r_pos == ref_pos:
-                return q_pos
-    elif mode == 1:
-        for q_pos, r_pos in aligned_pair_iter:
-            if r_pos >= ref_pos:
-                return q_pos
-    elif mode == 2:
-        prev_q = None
-        for q_pos, r_pos in aligned_pair_iter:
-            if r_pos == ref_pos:
-                return q_pos
-            elif r_pos > ref_pos:
-                if prev_q is None:
-                    error("prev is None")
-                return prev_q
-            prev_q = q_pos
-    else:
-        error("Invalid mode: %s" % mode)
-    error("Reference position did not map to query position: %d\n%s" % (ref_pos, str(s.get_aligned_pairs(matches_only=True))))
-
-# get the reference position that mapped to a given query position
-def query_pos_to_ref_pos(s, query_pos, mode=0):
-    '''Given a query position and an alignment, find the position in the reference that mapped to that query position
-
-    Args:
-        ``s`` (``pysam.AlignedSegment``): The mapped read
+        ``cigar`` (``list`` of ``tuple``): The CIGAR operations of the alignment
 
         ``query_pos`` (``int``): The query position
 
-        ``mode`` (``int``): How to handle if the query position doesn't exactly match the query (e.g. insertion). 0 = must match query_pos, 1 = match query_pos or first position > query_pos, 2 = match query_pos or last position < query_pos
+        ``ref_start`` (``int``): The reference start position
 
     Returns:
         ``int``: The corresponding reference position
     '''
-    aligned_pair_iter = s.get_aligned_pairs(matches_only=True)
-    if mode == 0:
-        for q_pos, r_pos in aligned_pair_iter:
-            if q_pos == query_pos:
-                return q_pos
-    elif mode == 1:
-        for q_pos, r_pos in aligned_pair_iter:
-            if q_pos >= query_pos:
-                return q_pos
-    elif mode == 2:
-        prev_r = None
-        for q_pos, r_pos in aligned_pair_iter:
-            if q_pos == query_pos:
-                return q_pos
-            elif q_pos > query_pos:
-                if prev_r is None:
-                    error("prev is None")
-                return prev_r
-            prev_r = r_pos
+    cur_pos = 0; ref_pos = ref_start
+    for cig, n in cigar:
+        if CONSUME_QUERY[cig]:
+            if query_pos <= cur_pos + n:
+                if CONSUME_REF[cig]:
+                    ref_pos += (query_pos - cur_pos)
+                return ref_pos
+            cur_pos += n
+        if CONSUME_REF[cig]:
+            ref_pos += n
+    return ref_pos
+
+# get reference position on query
+def get_pos_on_query(cigar, ref_pos, ref_start):
+    '''Convert a reference position to a query position
+
+    Args:
+        ``cigar`` (``list`` of ``tuple``): The CIGAR operations of the alignment
+
+        ``ref_pos`` (``int``): The reference position
+
+        ``query_start`` (``int``): The query start position
+
+    Returns:
+        ``int``: The corresponding query position
+    '''
+    query_pos = 0; cur_pos = ref_start
+    for cig, n in cigar:
+        if CONSUME_REF[cig]:
+            if ref_pos <= cur_pos + n:
+                if CONSUME_QUERY[cig]:
+                    query_pos += (ref_pos - cur_pos)
+                return query_pos
+            cur_pos += n
+        if CONSUME_QUERY[cig]:
+            query_pos += n
+    return query_pos
 
 # fix new CIGAR after trimming
 def fix_cigar(new_cigar):
+    if not isinstance(new_cigar, list):
+        new_cigar = list(new_cigar)
     proper_cigar = list()
     for i in range(len(new_cigar)):
         if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
@@ -362,7 +349,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
     if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
         # prepare to trim forward primer
         max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
-        delete_start = ref_pos_to_query_pos(s, max_overlap_end, mode=1)
+        delete_start = get_pos_on_query(s.cigartuples, max_overlap_end + 1, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
 
         # for each operation in the CIGAR
@@ -414,8 +401,8 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
     # trim primer from end of read
     if not (s.is_paired and isize_flag and not s.is_reverse) and len(overlapping_primer_inds_end) > 0:
         # prepare to trim reverse primer
-        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) - 2 # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
-        delete_end = s.query_alignment_length - ref_pos_to_query_pos(s, min_overlap_start, mode=2)
+        min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
+        delete_end = cigar_to_qlen(s.cigartuples) - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
         # for each operation in the CIGAR (reverse order because reverse primer)
@@ -439,21 +426,21 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
                 else: # Since we consume the query, we just need to keep clipping
                     new_cigar.append((BAM_CSOFT_CLIP, n)); continue
 
-            # Update based on how much we just deleted
-            tmp = n
-            n = max(n - del_len, 0)
-            del_len = max(del_len - tmp, 0)
+                # Update based on how much we just deleted
+                tmp = n
+                n = max(n - del_len, 0)
+                del_len = max(del_len - tmp, 0)
 
-            # If there is still more left to do, append it
-            if n > 0:
-                new_cigar.append((cig, n))
+                # If there is still more left to do, append it
+                if n > 0:
+                    new_cigar.append((cig, n))
 
-            # If we are done and just consumed, we want to just start appending everything.
-            if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
-                pos_start = True
+                # If we are done and just consumed, we want to just start appending everything.
+                if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
+                    pos_start = True
 
         # update our alignment accordingly
-        s.cigartuples = list(reversed(fix_cigar(new_cigar))) # I appended to new_cigar backwards, so it needs to be reversed at the end
+        s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
     # set things up for quality trimming
     qual = s.query_alignment_qualities
@@ -486,7 +473,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
         # Initialization for quality trimming
         new_cigar = list(); del_len = i
-        start_pos = query_pos_to_ref_pos(s, s.query_alignment_start + del_len, mode=1)
+        start_pos = get_pos_on_ref(s.cigartuples, del_len + s.query_alignment_start, s.reference_start)
 
         # Do we need to trim?
         if start_pos > s.reference_start:
@@ -520,11 +507,68 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
             # update our alignment accordingly
             s.cigartuples = fix_cigar(new_cigar)
-            s.reference_start = start_pos
+            #s.reference_start = start_pos # DOESN'T EVER SEEM TO CHANGE TODO
 
     # quality trim (forward strand, so trim from end)
     else:
-        pass # TODO
+        # build our buffer
+        i = true_start
+        for offset in range(window - 1):
+            total += qual[i + offset]
+
+        # Loop through the read, determine when we need to trim
+        while i < true_end:
+            # We are nearing the end, so we need to shrink our window
+            if (true_end - window) < i:
+                window -= 1
+
+            # Still have more to go, so add in our new value
+            else:
+                total += qual[i + window - 1]
+
+            # Check our current quality score
+            if (total / window) < min_quality:
+                break
+
+            # Remove the no longer needed quality score, and advance i
+            total -= qual[i]; i += 1
+
+        # Initialization for quality trimming
+        new_cigar = list(); del_len = true_end - i
+        start_pos = get_pos_on_ref(s.cigartuples, del_len, s.reference_start)
+
+        # Do we need to trim?
+        if del_len > 0:
+            for operation in reversed(s.cigartuples):
+                # Nothing left to trim, just append everything
+                if del_len == 0:
+                    new_cigar.append(operation); continue
+                cig, n = operation
+
+                # These are just clips, so it's not part of our quality trim determination
+                if cig == BAM_CSOFT_CLIP or cig == BAM_CHARD_CLIP:
+                    new_cigar.append(operation); continue
+
+                # We consume the query, so we may need to trim
+                if CONSUME_QUERY[cig]:
+                    # How much do we need to delete?
+                    if del_len >= n: # All of the current operation
+                        new_cigar.append((BAM_CSOFT_CLIP, n))
+                    else: # Only part of the current operation
+                        new_cigar.append((BAM_CSOFT_CLIP, del_len))
+                        
+                    # Decrease our delete length by how much we've deleted
+                    tmp = n
+                    n = max(n - del_len, 0)
+                    del_len = max(del_len - tmp, 0)
+
+                    # If we ran out of things to delete, we need to append the rest of the operation
+                    if n > 0:
+                        new_cigar.append((cig, n))
+
+            # update our alignment accordingly
+            s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
+            #s.reference_start = start_pos # DOESN'T EVER SEEM TO CHANGE TODO
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
