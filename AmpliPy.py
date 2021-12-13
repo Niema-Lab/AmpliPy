@@ -640,7 +640,7 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
 
         ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
     '''
-    # load input files and preprocess
+    # print AmpliPy mode details
     if not (run_trim or run_variants or run_consensus):
         error("Not running any of the AmpliPy operations")
     if run_trim and not (run_variants or run_consensus):
@@ -651,15 +651,18 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
     else:
         print_log("Executing AmpliPy All-In-One (v%s)" % VERSION)
+
+    # load input files and preprocess
     if reference_fn is not None:
         print_log("Loading reference genome: %s" % reference_fn)
         ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
+        ref_genome_len = len(ref_genome_sequence)
     if primer_fn is not None:
         print_log("Loading primers: %s" % primer_fn)
         primers = load_primers(primer_fn)
         max_primer_len = max(end-start for start,end in primers)
         print_log("Precalculating overlapping primers...")
-        min_primer_start, max_primer_end = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
+        min_primer_start, max_primer_end = find_overlapping_primers(ref_genome_len, primers, primer_pos_offset)
     if run_trim:
         print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
         print_log("Output trimmed SAM/BAM: %s" % trimmed_reads_fn)
@@ -681,6 +684,11 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         NUM_TRIMMED_QUALITY = 0
         NUM_TOO_SHORT = 0
         NUM_WRITTEN = 0
+
+    # if variant/consensus calling, initialize symbol counts
+    if run_variants or run_consensus:
+        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
+        symbol_counts_insertions = [{'A':0,'C':0,'G':0,'T':0,'-':0} for _ in range(ref_genome_len + 1)] # [i] = symbol counts before reference position i ([0] = insertions at beginning, [ref_genome_len] = insertions at end)
 
     # process reads
     print_log("Processing reads...")
@@ -717,7 +725,30 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
-            error("STILL IMPLEMENTING")
+            query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
+            query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
+            query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
+            pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
+            i = 0
+            while i < len(pos_pairs):
+                # get this pair and move to next
+                q_pos, r_pos = pos_pairs[i]; i += 1
+
+                # deletion
+                if q_pos is None:
+                    symbol_counts_at_ref_pos[r_pos]['-'] += 1
+
+                # soft-clipped (so ignore)
+                elif q_pos < query_start or q_pos >= query_end:
+                    continue
+
+                # insertion
+                elif r_pos is None:
+                    error("HANDLE INSERTIONS") # TODO
+
+                # match/mismatch
+                else:
+                    symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
 
         # print progress update
         s_i += 1
