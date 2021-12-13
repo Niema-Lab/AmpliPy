@@ -268,10 +268,6 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
 
 # NOTE TO NIEMA: I think these cigar_to_* and get_pos_on_* functions can be sped up by using functions in pysam.AlignedSegment
 
-# get alignment length from CIGAR
-def cigar_to_query_length(cigar):
-    return sum(n for cig,n in cigar if CONSUME_QUERY[cig])
-
 # get reference length from CIGAR
 def cigar_to_ref_length(cigar):
     return sum(n for cig,n in cigar if CONSUME_REF[cig])
@@ -432,7 +428,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
         # prepare to trim reverse primer
         trimmed_primer_end = True
         min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
-        delete_end = cigar_to_query_length(s.cigartuples) - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
+        delete_end = s.query_length - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
         # for each operation in the CIGAR (reverse order because reverse primer)
