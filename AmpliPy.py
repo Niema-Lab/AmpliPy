@@ -39,6 +39,7 @@ ERROR_TEXT_FILE_NOT_FOUND = "File not found"
 ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
 ERROR_TEXT_INVALID_READ_EXTENSION = "Invalid read mapping extension (should be .sam or .bam)"
+ERROR_TEXT_INVALID_VCF_EXTENSION = "Invalid variants extension (should be .vcf, .vcf.gz, or .bcf)"
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
@@ -194,6 +195,27 @@ def load_primers(primer_fn):
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
     primers.sort() # shouldn't be necessary (BED should be sorted), but just in case
     return primers
+
+# create 
+def create_VariantFile_object(output_variants_fn=None):
+    '''Create ``pysam.VariantFile`` object for the output VCF file
+
+    Args:
+        ``output_variants_fn`` (``str``): Filename of output VCF
+
+    Returns:
+        ``pysam.VariantFile``: Stream for writing output VCF
+    '''
+    if output_variants_fn is None:
+        return None
+    elif output_variants_fn.lower() == 'stdout':
+        return pysam.VariantFile('-', 'w')
+    elif isfile(output_variants_fn):
+        error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, output_variants_fn))
+    elif output_variants_fn.lower().endswith('.vcf') or output_variants_fn.lower().endswith('.vcf.gz') or output_variants_fn.lower().endswith('.bcf'):
+        return pysam.VariantFile(output_variants_fn, 'w')
+    else:
+        error("%s: %s" % (ERROR_TEXT_INVALID_VCF_EXTENSION, output_variants_fn))
 
 # create AlignmentFile objects for SAM/BAM input and output files
 def create_AlignmentFile_objects(input_reads_fn=None, output_reads_fn=None):
@@ -586,27 +608,31 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
     return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
 # run AmpliPy
-def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trimmed_reads_fn=None, primer_pos_offset=None, min_length=None, min_quality=None, sliding_window_width=None, include_no_primer=None, run_trim=False, run_variants=False, run_consensus=False):
+def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trimmed_reads_fn=None, variants_fn=None, consensus_fn=None, primer_pos_offset=None, min_length=None, min_quality=None, sliding_window_width=None, include_no_primer=None, run_trim=False, run_variants=False, run_consensus=False):
     '''Run AmpliPy
 
     Args:
-        ``untrimmed_reads_fn`` (``str``): Filename of input untrimmed reads SAM/BAM
+        ``untrimmed_reads_fn`` (``str``): Filename of untrimmed reads SAM/BAM
 
         ``primer_fn`` (``str``): Filename of input primer BED
 
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA
 
-        ``trimmed_reads_fn`` (``str``): Filename of output trimmed reads SAM/BAM
+        ``trimmed_reads_fn`` (``str``): Filename of trimmed reads SAM/BAM
 
-        ``primer_pos_offset`` (``int``): Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
+        ``variants_fn`` (``str``): Filename of output variants VCF
 
-        ``min_length`` (``int``): Minimum length of read to retain after trimming
+        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
 
-        ``min_quality`` (``int``): Minimum quality threshold for sliding window to pass
+        ``primer_pos_offset`` (``int``): Trimming: Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
 
-        ``sliding_window_width`` (``int``): Width of sliding window
+        ``min_length`` (``int``): Trimming: Minimum length of read to retain after trimming
 
-        ``include_no_primer`` (``bool``): ``True`` to include reads with no primers, otherwise ``False``
+        ``min_quality`` (``int``): Trimming: Minimum quality threshold for sliding window to pass
+
+        ``sliding_window_width`` (``int``): Trimming: Width of sliding window
+
+        ``include_no_primer`` (``bool``): Trimming: ``True`` to include reads with no primers trimmed, otherwise ``False``
 
         ``run_trim`` (``bool``): ``True`` to trim reads, otherwise ``False``
 
@@ -615,6 +641,8 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
     '''
     # load input files and preprocess
+    if not (run_trim or run_variants or run_consensus):
+        error("Not running any of the AmpliPy operations")
     print_log("Executing AmpliPy (v%s)" % VERSION)
     if reference_fn is not None:
         print_log("Loading reference genome: %s" % reference_fn)
@@ -632,6 +660,9 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
     else:
         print_log("Input trimmed SAM/BAM: %s" % trimmed_reads_fn)
         in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
+    if variants_fn is not None:
+        print_log("Output variants VCF: %s" % variants_fn)
+        out_vcf = create_VariantFile_object(variants_fn)
 
     # initialize counters
     NUM_UNMAPPED = 0
@@ -656,7 +687,7 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         if s.cigartuples is None:
             NUM_NO_CIGAR += 1; continue
 
-        # trim this read
+        # trim this read (if applicable)
         if run_trim:
             trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
             if trimmed_primer_start:
@@ -666,16 +697,20 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
             if trimmed_quality:
                 NUM_TRIMMED_QUALITY += 1
 
-        # write this read (if applicable)
-        write_read = True
-        if s.reference_length < min_length:
-            NUM_TOO_SHORT += 1; write_read = False
-        if not (trimmed_primer_start or trimmed_primer_end):
-            NUM_UNTRIMMED_PRIMER += 1
-            if not include_no_primer:
-                write_read = False
-        if write_read:
-            out_aln.write(s); NUM_WRITTEN += 1
+            # write this read (if applicable)
+            write_read = True
+            if s.reference_length < min_length:
+                NUM_TOO_SHORT += 1; write_read = False
+            if not (trimmed_primer_start or trimmed_primer_end):
+                NUM_UNTRIMMED_PRIMER += 1
+                if not include_no_primer:
+                    write_read = False
+            if write_read:
+                out_aln.write(s); NUM_WRITTEN += 1
+
+        # if variant/consensus calling, update base counts
+        if run_variants or run_consensus:
+            error("STILL IMPLEMENTING")
 
         # print progress update
         s_i += 1
@@ -691,35 +726,7 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
         print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
         print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
-    print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
-
-# run AmpliPy Variants
-def run_variants(trimmed_reads_fn, variants_fn):
-    '''Run AmpliPy Variants
-
-    Args:
-        ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
-
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
-
-        ``variants_fn`` (``str``): Filename of output variants VCF
-    '''
-    print_log("Executing AmpliPy Variants (v%s)" % VERSION)
-    error("VARIANTS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- variants_fn: %s" % (trimmed_reads_fn, variants_fn)) # TODO
-
-# run AmpliPy Consensus
-def run_consensus(trimmed_reads_fn, consensus_fn):
-    '''Run AmpliPy Consensus
-
-    Args:
-        ``trimmed_reads_fn`` (``str``): Filename of input trimmed reads SAM/BAM
-
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA (is this needed?)
-
-        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
-    '''
-    print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
-    error("CONSENSUS NOT IMPLEMENTED\n- trimmed_reads_fn: %s\n- consensus_fn: %s" % (trimmed_reads_fn, consensus_fn)) # TODO
+        print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
 
 # main content
 if __name__ == "__main__":
@@ -738,12 +745,15 @@ if __name__ == "__main__":
             sliding_window_width = args.sliding_window_width,
             include_no_primer = args.include_no_primer,
             run_trim = True,
-            run_variants = False,
-            run_consensus = False,
         )
     elif args.command == 'variants':
-        run_variants(args.input, args.output)
+        run_amplipy(
+            trimmed_reads_fn = args.input,
+            reference_fn = args.reference,
+            variants_fn = args.output,
+            run_variants = True,
+        )
     elif args.command == 'consensus':
-        run_consensus(args.input, args.output)
+        error("CONSENSUS NOT IMPLEMENTED")
     elif args.command == 'aio':
-        run_aio(args.input, args.amplipy_index, args.output_trimmed_reads, args.output_variants, args.output_consensus)
+        error("AIO NOT IMPLEMENTED")
