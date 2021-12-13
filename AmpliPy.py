@@ -111,13 +111,15 @@ def parse_args():
     return parser.parse_args()
 
 # find overlapping primers
-def find_overlapping_primers(ref_genome_length, primers):
+def find_overlapping_primers(ref_genome_length, primers, primer_pos_offset):
     '''Find all primers that cover every index of the reference genome
 
     Args:
         ``ref_genome_length`` (``int``): Length of the reference genome
 
         ``primers`` (``list`` of ``(int,int)``): List of primer indices, where each primer is represented as a ``(start,end)`` tuple. Note that this uses 0-based indices, ``start`` is **in**clusive, and ``end`` is **ex**clusive. For example, `(0,100)` is the 100-length window starting at index 0 and ending at index 99.
+
+        ``primer_pos_offset`` (``int``): Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
 
     Returns:
         ``list`` of ``list`` of ``int``: Let ``overlapping_primers`` denote the return value. For each position ``ref_pos`` of the reference genome, ``overlapping_primers[ref_pos]`` is a list of all primers (represented as their index in ``primers``) that cover ``ref_pos``.
@@ -129,11 +131,11 @@ def find_overlapping_primers(ref_genome_length, primers):
     # compute overlapping primers for each position of the reference genome
     for ref_pos in range(ref_genome_length):
         # remove primers that have now been passed
-        while len(curr_primers) != 0 and ref_pos >= primers[curr_primers[0]][1]:
+        while len(curr_primers) != 0 and ref_pos >= (primers[curr_primers[0]][1] + primer_pos_offset):
             curr_primers.popleft()
 
         # add primers that have now been entered
-        while i < num_primers and ref_pos >= primers[i][0]:
+        while i < num_primers and ref_pos >= (primers[i][0] - primer_pos_offset):
             curr_primers.append(i); i += 1
 
         # the primers in curr_primers must span ref_pos
@@ -173,6 +175,7 @@ def load_primers(primer_fn):
         ``primer_fn`` (``str``): Filename of input primer BED
 
     Returns:
+        ``list`` of ``tuple``: The primers in the given BED, represented as ``(start, end)`` tuples (start = inclusive, end = exclusive, just like in BED)
     '''
     if not isfile(primer_fn):
         error("%s: %s" % (ERROR_TEXT_FILE_NOT_FOUND, primer_fn))
@@ -273,6 +276,9 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
         ``ref_pos`` (``int``): The reference position
 
         ``mode`` (``int``): How to handle if the reference position doesn't exactly match the query (e.g. deletion). 0 = must match ref_pos, 1 = match ref_pos or first position > ref_pos, 2 = match ref_pos or last position < ref_pos
+
+    Returns:
+        ``int``: The corresponding query position
     '''
     aligned_pair_iter = s.get_aligned_pairs(matches_only=True)
     if mode == 0:
@@ -284,7 +290,7 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
             if r_pos >= ref_pos:
                 return q_pos
     elif mode == 2:
-        prev_q = None; prev_r = None
+        prev_q = None
         for q_pos, r_pos in aligned_pair_iter:
             if r_pos == ref_pos:
                 return q_pos
@@ -292,10 +298,44 @@ def ref_pos_to_query_pos(s, ref_pos, mode=0):
                 if prev_q is None:
                     error("prev is None")
                 return prev_q
-            prev_q = q_pos; prev_r = r_pos
+            prev_q = q_pos
     else:
         error("Invalid mode: %s" % mode)
     error("Reference position did not map to query position: %d\n%s" % (ref_pos, str(s.get_aligned_pairs(matches_only=True))))
+
+# get the reference position that mapped to a given query position
+def query_pos_to_ref_pos(s, query_pos, mode=0):
+    '''Given a query position and an alignment, find the position in the reference that mapped to that query position
+
+    Args:
+        ``s`` (``pysam.AlignedSegment``): The mapped read
+
+        ``query_pos`` (``int``): The query position
+
+        ``mode`` (``int``): How to handle if the query position doesn't exactly match the query (e.g. insertion). 0 = must match query_pos, 1 = match query_pos or first position > query_pos, 2 = match query_pos or last position < query_pos
+
+    Returns:
+        ``int``: The corresponding reference position
+    '''
+    aligned_pair_iter = s.get_aligned_pairs(matches_only=True)
+    if mode == 0:
+        for q_pos, r_pos in aligned_pair_iter:
+            if q_pos == query_pos:
+                return q_pos
+    elif mode == 1:
+        for q_pos, r_pos in aligned_pair_iter:
+            if q_pos >= query_pos:
+                return q_pos
+    elif mode == 2:
+        prev_r = None
+        for q_pos, r_pos in aligned_pair_iter:
+            if q_pos == query_pos:
+                return q_pos
+            elif q_pos > query_pos:
+                if prev_r is None:
+                    error("prev is None")
+                return prev_r
+            prev_r = r_pos
 
 # fix new CIGAR after trimming
 def fix_cigar(new_cigar):
@@ -307,7 +347,7 @@ def fix_cigar(new_cigar):
     return proper_cigar
 
 # trim a single read
-def trim_read(s, overlapping_primers, primers, max_primer_len):
+def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width):
     '''Primer-trim and quality-trim an individual read. In the future, for multiprocessing, I can just change ``s`` argument to be the relevant member variables (e.g. reference_start, reference_end, query_length, is_paired, is_reverse, etc.) and just return the final updated pysam cigartuples (list of tuples)
 
     Args:
@@ -415,8 +455,76 @@ def trim_read(s, overlapping_primers, primers, max_primer_len):
         # update our alignment accordingly
         s.cigartuples = list(reversed(fix_cigar(new_cigar))) # I appended to new_cigar backwards, so it needs to be reversed at the end
 
-    # quality trim (all reads)
-    pass # TODO
+    # quality trim (reverse strand, so trim from beginning)
+    if s.is_reverse:
+        # set things up
+        qual = s.query_alignment_qualities
+        total = 0; true_start = 0; true_end = len(qual)
+        window = sliding_window_width if sliding_window_width <= len(qual) else len(qual)
+
+        # build our buffer
+        i = true_end
+        for offset in range(1, window):
+            total += qual[i - offset]
+
+        # Loop through the read, determine when we need to trim
+        while i > true_start:
+            # We are nearing the end, so we need to shrink our window
+            if true_start + window > i:
+                window -= 1
+
+            # Still have more to go, so add in our new value
+            else:
+                total += qual[i - window]
+
+            # Check our current quality score
+            if (total / window) < min_quality:
+                break
+
+            # Remove the no longer needed quality score, and advance i
+            total -= qual[i - 1]; i -= 1
+
+        # Initialization for quality trimming
+        new_cigar = list(); del_len = i
+        start_pos = query_pos_to_ref_pos(s, s.query_alignment_start + del_len, mode=1)
+
+        # Do we need to trim?
+        if start_pos > s.reference_start:
+            # for each operation in the CIGAR
+            for operation in s.cigartuples:
+                # Nothing left to trim, just append everything
+                if del_len == 0:
+                    new_cigar.append(operation); continue
+                cig, n = operation
+
+                # These are just clips, so it's not part of our quality trim determination
+                if cig == BAM_CSOFT_CLIP or cig == BAM_CHARD_CLIP:
+                    new_cigar.append(operation); continue
+
+                # We consume the query, so we may need to trim
+                if CONSUME_QUERY[cig]:
+                    # How much do we need to delete?
+                    if del_len >= n: # All of the current operation
+                        new_cigar.append((BAM_CSOFT_CLIP, n))
+                    else: # Only part of the current operation
+                        new_cigar.append((BAM_CSOFT_CLIP, del_len))
+
+                    # Decrease our delete length by how much we've deleted
+                    tmp = n
+                    n = max(n - del_len, 0)
+                    del_len = max(del_len - tmp, 0)
+
+                    # If we ran out of things to delete, we need to append the rest of the operation
+                    if n > 0:
+                        new_cigar.append((cig, n))
+
+            # update our alignment accordingly
+            s.cigartuples = fix_cigar(new_cigar)
+            s.reference_start = start_pos
+
+    # quality trim (forward strand, so trim from end)
+    else:
+        pass # TODO
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
@@ -453,7 +561,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     primers = load_primers(primer_fn)
     max_primer_len = max(end-start for start,end in primers)
     print_log("Precalculate overlapping primers...")
-    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers)
+    overlapping_primers = find_overlapping_primers(len(ref_genome_sequence), primers, primer_pos_offset)
     print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
     print_log("Output untrimmed SAM/BAM: %s" % trimmed_reads_fn)
     in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
@@ -475,7 +583,7 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
             NUM_NO_CIGAR += 1; continue
 
         # trim this read and write the result
-        status_trim_primers = trim_read(s, overlapping_primers, primers, max_primer_len)
+        status_trim_primers = trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width)
         out_aln.write(s)
 
         # print progress update
@@ -608,7 +716,7 @@ if (args.dest == "trim"):
     output = pysam.AlignmentFile(args.out_file, "w", header=bam.header)
 
     # Call trim
-    stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_qual_thresh=args.qual_thresh,
+    stats = trim(bam, primer_file, output, min_read_length=args.min_read_len, min_quality=args.qual_thresh,
                  sliding_window=args.sliding_window, include_no_primer=args.incl_no_primer)
 
     # Print stats
