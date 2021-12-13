@@ -687,8 +687,8 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
 
     # if variant/consensus calling, initialize symbol counts
     if run_variants or run_consensus:
-        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
-        symbol_counts_insertions = [{'A':0,'C':0,'G':0,'T':0,'-':0} for _ in range(ref_genome_len + 1)] # [i] = symbol counts before reference position i ([0] = insertions at beginning, [ref_genome_len] = insertions at end)
+        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
+        symbol_counts_insertions = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len + 1)] # [i] = symbol counts BEFORE reference position i ([0] = insertions at beginning, [ref_genome_len] = insertions at end)
 
     # process reads
     print_log("Processing reads...")
@@ -728,6 +728,8 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
             query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
             query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
             query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
+            ref_start = s.reference_start # 0-based leftmost coordinate
+            ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
             pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
             i = 0
             while i < len(pos_pairs):
@@ -738,13 +740,30 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
                 if q_pos is None:
                     symbol_counts_at_ref_pos[r_pos]['-'] += 1
 
-                # soft-clipped (so ignore)
-                elif q_pos < query_start or q_pos >= query_end:
+                # soft-clipped beginning (so ignore)
+                elif q_pos < query_start:
                     continue
+
+                # soft-clipped end (so early terminate)
+                elif q_pos >= query_end:
+                    break
 
                 # insertion
                 elif r_pos is None:
-                    error("HANDLE INSERTIONS") # TODO
+                    # search for next reference match
+                    q_pos_insertion_start = q_pos
+                    while q_pos < query_end and r_pos is None:
+                        q_pos, r_pos = pos_pairs[i]; i += 1
+                    insertion_seq = query_seq[q_pos_insertion_start : q_pos] # end needs to be exclusive because this is the NEXT match
+                    if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
+                        ref_insertion_pos = ref_end
+                    else: # otherwise, this is a normal insertion before r_pos
+                        ref_insertion_pos = r_pos
+                        i -= 1 # I need to handle this reference position next loop
+                    if insertion_seq in symbol_counts_insertions[ref_insertion_pos]:
+                        symbol_counts_insertions[ref_insertion_pos][insertion_seq] += 1
+                    else:
+                        symbol_counts_insertions[ref_insertion_pos][insertion_seq] = 1
 
                 # match/mismatch
                 else:
@@ -754,6 +773,14 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
         s_i += 1
         if s_i % PROGRESS_NUM_READS == 0:
             print_log("Processed %d reads..." % s_i)
+
+    # call variants (if applicable)
+    if run_variants:
+        error("NEED TO IMPLEMENT VARIANT CALLING")
+
+    # produce consensus (if applicable)
+    if run_consensus:
+        error("NEED TO IMPLEMENT CONSENSUS")
 
     # finish up
     print_log("Finished Processing %d reads" % s_i)
@@ -792,6 +819,26 @@ if __name__ == "__main__":
             run_variants = True,
         )
     elif args.command == 'consensus':
-        error("CONSENSUS NOT IMPLEMENTED")
+        run_amplipy(
+            trimmed_reads_fn = args.input,
+            reference_fn = args.reference,
+            consensus_fn = args.output,
+            run_consensus = True,
+        )
     elif args.command == 'aio':
-        error("AIO NOT IMPLEMENTED")
+        run_amplipy(
+            untrimmed_reads_fn = args.input,
+            primer_fn = args.primer,
+            reference_fn = args.reference,
+            trimmed_reads_fn = args.output_trimmed_reads,
+            variants_fn = args.output_variants,
+            consensus_fn = args.output_consensus,
+            primer_pos_offset = args.primer_pos_offset,
+            min_length = args.min_length,
+            min_quality = args.min_quality,
+            sliding_window_width = args.sliding_window_width,
+            include_no_primer = args.include_no_primer,
+            run_trim = True,
+            run_variants = True,
+            run_consensus = True,
+        )
