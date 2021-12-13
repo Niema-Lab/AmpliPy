@@ -685,6 +685,16 @@ def run_amplipy(
 
         ``sliding_window_width`` (``int``): Trimming: Width of sliding window
 
+        ``min_freq_consensus`` (``float``): Consensus: Minimum frequency for consensus calling
+
+        ``min_freq_variants`` (``float``): Variants: Minimum frequency for variant calling
+
+        ``min_depth_consensus`` (``int``): Consensus: Minimum depth for consensus calling
+
+        ``min_depth_variants`` (``int``): Variants: Minimum depth for consensus calling
+
+        ``unknown_symbol`` (``str``): Consensus: Symbol for unknown nucleotides in consensus (e.g. N)
+
         ``include_no_primer`` (``bool``): Trimming: ``True`` to include reads with no primers trimmed, otherwise ``False``
 
         ``run_trim`` (``bool``): ``True`` to trim reads, otherwise ``False``
