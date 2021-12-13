@@ -641,7 +641,27 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
     return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
 # run AmpliPy
-def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trimmed_reads_fn=None, variants_fn=None, consensus_fn=None, primer_pos_offset=None, min_length=None, min_quality=None, sliding_window_width=None, include_no_primer=None, run_trim=False, run_variants=False, run_consensus=False):
+def run_amplipy(
+    untrimmed_reads_fn = None,
+    primer_fn = None,
+    reference_fn = None,
+    trimmed_reads_fn = None,
+    variants_fn = None,
+    consensus_fn = None,
+    primer_pos_offset = None,
+    min_length = None,
+    min_quality = None,
+    sliding_window_width = None,
+    min_freq_consensus = None,
+    min_freq_variants = None,
+    min_depth_consensus = None,
+    min_depth_variants = None,
+    unknown_symbol = None,
+    include_no_primer = None,
+    run_trim = False,
+    run_variants = False,
+    run_consensus = False,
+):
     '''Run AmpliPy
 
     Args:
@@ -849,6 +869,9 @@ if __name__ == "__main__":
             trimmed_reads_fn = args.input,
             reference_fn = args.reference,
             variants_fn = args.output,
+            min_quality = args.min_quality,
+            min_freq_variants = args.min_freq,
+            min_depth_variants = args.min_depth,
             run_variants = True,
         )
     elif args.command == 'consensus':
@@ -856,6 +879,10 @@ if __name__ == "__main__":
             trimmed_reads_fn = args.input,
             reference_fn = args.reference,
             consensus_fn = args.output,
+            min_quality = args.min_quality,
+            min_freq_consensus = args.min_freq,
+            min_depth_consensus = args.min_depth,
+            unknown_symbol = args.unknown_symbol,
             run_consensus = True,
         )
     elif args.command == 'aio':
@@ -870,6 +897,11 @@ if __name__ == "__main__":
             min_length = args.min_length,
             min_quality = args.min_quality,
             sliding_window_width = args.sliding_window_width,
+            min_freq_consensus = args.min_freq_consensus,
+            min_freq_variants = args.min_freq_variants,
+            min_depth_consensus = args.min_depth_consensus,
+            min_depth_variants = args.min_depth_variants,
+            unknown_symbol = args.unknown_symbol,
             include_no_primer = args.include_no_primer,
             run_trim = True,
             run_variants = True,
