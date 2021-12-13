@@ -18,6 +18,12 @@ VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
 
+# default arguments
+DEFAULT_MIN_LENGTH = 30
+DEFAULT_MIN_QUALITY = 20
+DEFAULT_PRIMER_POS_OFFSET = 0
+DEFAULT_SLIDING_WINDOW_WIDTH = 4
+
 # CIGAR operations
 CIGAR = ['BAM_CMATCH', 'BAM_CINS', 'BAM_CDEL', 'BAM_CREF_SKIP', 'BAM_CSOFT_CLIP', 'BAM_CHARD_CLIP', 'BAM_CPAD', 'BAM_CEQUAL', 'BAM_CDIFF', 'BAM_CBACK']
 BAM_CMATCH     = 0
@@ -80,10 +86,10 @@ def parse_args():
     trim_parser.add_argument('-p', '--primer', required=True, type=str, help=HELP_TEXT_PRIMER)
     trim_parser.add_argument('-r', '--reference', required=True, type=str, help=HELP_TEXT_REFERENCE)
     trim_parser.add_argument('-o', '--output', required=False, type=str, default='stdout', help=HELP_TEXT_READS_TRIMMED)
-    trim_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=0, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
-    trim_parser.add_argument('-m', '--min_length', required=False, type=int, default=30, help=HELP_TEXT_TRIM_MIN_LENGTH)
-    trim_parser.add_argument('-q', '--min_quality', required=False, type=int, default=20, help=HELP_TEXT_TRIM_MIN_QUAL)
-    trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=4, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
+    trim_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=DEFAULT_PRIMER_POS_OFFSET, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
+    trim_parser.add_argument('-m', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
+    trim_parser.add_argument('-q', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_TRIM_MIN_QUAL)
+    trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=DEFAULT_SLIDING_WINDOW_WIDTH, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
     trim_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
     # AmpliPy Variants args
@@ -106,6 +112,11 @@ def parse_args():
     aio_parser.add_argument('-ot', '--output_trimmed_reads', required=True, type=str, help=HELP_TEXT_READS_TRIMMED)
     aio_parser.add_argument('-ov', '--output_variants', required=True, type=str, help=HELP_TEXT_VARIANTS)
     aio_parser.add_argument('-oc', '--output_consensus', required=True, type=str, help=HELP_TEXT_CONSENSUS)
+    aio_parser.add_argument('-x', '--primer_pos_offset', required=False, type=int, default=DEFAULT_PRIMER_POS_OFFSET, help=HELP_TEXT_TRIM_PRIMER_POS_OFFSET)
+    aio_parser.add_argument('-m', '--min_length', required=False, type=int, default=DEFAULT_MIN_LENGTH, help=HELP_TEXT_TRIM_MIN_LENGTH)
+    aio_parser.add_argument('-q', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_TRIM_MIN_QUAL)
+    aio_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=DEFAULT_SLIDING_WINDOW_WIDTH, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
+    aio_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
 
     # parse args and return
     return parser.parse_args()
