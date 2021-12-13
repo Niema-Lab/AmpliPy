@@ -267,8 +267,12 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     return in_aln, out_aln
 
 # get alignment length from CIGAR
-def cigar_to_qlen(cigar):
+def cigar_to_query_length(cigar):
     return sum(n for cig,n in cigar if CONSUME_QUERY[cig])
+
+# get reference length from CIGAR
+def cigar_to_ref_length(cigar):
+    return sum(n for cig,n in cigar if CONSUME_REF[cig])
 
 # get query position on reference
 def get_pos_on_ref(cigar, query_pos, ref_start):
@@ -339,15 +343,38 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
     Args:
         ``s`` (``pysam.AlignedSegment``): The mapped read to trim (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+
+        ``overlapping_primers`` (``list`` of ``list`` of ``int``): Preprocessed list of indices of primers that span each position of the reference genome
+
+        ``primers`` (``list`` of ``tuple`` of ``int``): The primers as ``(start,end)`` tuples, where ``end`` is EXclusive
+
+        ``max_primer_len`` (``int``): Length of longest primer in ``primers``
+
+        ``min_quality`` (``int``): Minimum quality threshold for sliding window to pass
+
+        ``sliding_window_width`` (``int``): Width of sliding window
+
+    Returns:
+        ``bool``: ``True`` if primer trimming was done at the start of the read, otherwise ``False``
+
+        ``bool``: ``True`` if primer trimming was done at the end of the read, otherwise ``False``
+
+        ``bool``: ``True`` if quality trimming was done, otherwise ``False``
     '''
     # get list of primers that cover the start and end indices (wrt reference) of this alignment (each element in each list is an index in `primers`)
     overlapping_primer_inds_start = overlapping_primers[s.reference_start]
     overlapping_primer_inds_end = overlapping_primers[s.reference_end-1] # "reference_end points to one past the last aligned residue"
     isize_flag = (abs(s.template_length) - max_primer_len) > s.query_length # Why does iVar compare this read's isize (template_length) against the max length of ALL primers (max_primer_len) instead of the max length of primers that cover this read's start position?
 
+    # flags for what happened when trimming this read
+    trimmed_primer_start = False
+    trimmed_primer_end = False
+    trimmed_quality = False
+
     # trim primer from start of read
     if not (s.is_paired and isize_flag and s.is_reverse) and len(overlapping_primer_inds_start) != 0:
         # prepare to trim forward primer
+        trimmed_primer_start = True
         max_overlap_end = max(primers[i][1] for i in overlapping_primer_inds_start) # just after max end of overlapping primers (no +1 because end of primer range is EXclusive)
         delete_start = get_pos_on_query(s.cigartuples, max_overlap_end + 1, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_start; pos_start = False; start_pos = 0
@@ -401,8 +428,9 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
     # trim primer from end of read
     if not (s.is_paired and isize_flag and not s.is_reverse) and len(overlapping_primer_inds_end) > 0:
         # prepare to trim reverse primer
+        trimmed_primer_end = True
         min_overlap_start = min(primers[i][0] for i in overlapping_primer_inds_end) # just before min start of overlapping primers (I think it should be -1 because start is INclusive, but -2 matches iVar)
-        delete_end = cigar_to_qlen(s.cigartuples) - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
+        delete_end = cigar_to_query_length(s.cigartuples) - get_pos_on_query(s.cigartuples, min_overlap_start, s.reference_start)
         new_cigar = list(); ref_add = 0; del_len = delete_end; pos_start = False
 
         # for each operation in the CIGAR (reverse order because reverse primer)
@@ -477,6 +505,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
         # Do we need to trim?
         if start_pos > s.reference_start:
+            trimmed_quality = True
             # for each operation in the CIGAR
             for operation in s.cigartuples:
                 # Nothing left to trim, just append everything
@@ -507,7 +536,6 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
             # update our alignment accordingly
             s.cigartuples = fix_cigar(new_cigar)
-            #s.reference_start = start_pos # DOESN'T EVER SEEM TO CHANGE TODO
 
     # quality trim (forward strand, so trim from end)
     else:
@@ -538,7 +566,8 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
         start_pos = get_pos_on_ref(s.cigartuples, del_len, s.reference_start)
 
         # Do we need to trim?
-        if del_len > 0:
+        if del_len != 0:
+            trimmed_quality = True
             for operation in reversed(s.cigartuples):
                 # Nothing left to trim, just append everything
                 if del_len == 0:
@@ -568,7 +597,7 @@ def trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, slid
 
             # update our alignment accordingly
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
-            #s.reference_start = start_pos # DOESN'T EVER SEEM TO CHANGE TODO
+    return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
 # run AmpliPy Trim
 def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, primer_pos_offset, min_length, min_quality, sliding_window_width, include_no_primer):
@@ -613,6 +642,12 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
     # initialize counters
     NUM_UNMAPPED = 0
     NUM_NO_CIGAR = 0
+    NUM_TRIMMED_PRIMER_START = 0
+    NUM_TRIMMED_PRIMER_END = 0
+    NUM_UNTRIMMED_PRIMER = 0
+    NUM_TRIMMED_QUALITY = 0
+    NUM_TOO_SHORT = 0
+    NUM_WRITTEN = 0
 
     # trim reads
     print_log("Trimming reads...")
@@ -626,18 +661,38 @@ def run_trim(untrimmed_reads_fn, primer_fn, reference_fn, trimmed_reads_fn, prim
         if s.cigartuples is None:
             NUM_NO_CIGAR += 1; continue
 
-        # trim this read and write the result
-        status_trim_primers = trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width)
-        out_aln.write(s)
+        # trim this read
+        trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, overlapping_primers, primers, max_primer_len, min_quality, sliding_window_width)
+        if trimmed_primer_start:
+            NUM_TRIMMED_PRIMER_START += 1
+        if trimmed_primer_end:
+            NUM_TRIMMED_PRIMER_END += 1
+        if trimmed_quality:
+            NUM_TRIMMED_QUALITY += 1
+
+        # write this read (if applicable)
+        write_read = True
+        if cigar_to_ref_length(s.cigartuples) < min_length:
+            NUM_TOO_SHORT += 1; write_read = False
+        if not (trimmed_primer_start or trimmed_primer_end):
+            NUM_UNTRIMMED_PRIMER += 1
+            if not include_no_primer:
+                write_read = False
+        if write_read:
+            out_aln.write(s); NUM_WRITTEN += 1
 
         # print progress update
         s_i += 1
         if s_i % PROGRESS_NUM_READS == 0:
             print_log("Trimmed %d reads..." % s_i)
     print_log("Finished trimming %d reads" % s_i)
-
-	# TODO DELETE WHEN DONE
-    error("TRIM NOT IMPLEMENTED\n- untrimmed_reads_fn: %s\n- primer_fn: %s\n- trimmed_reads_fn: %s" % (untrimmed_reads_fn, primer_fn, trimmed_reads_fn)) # TODO
+    print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
+    print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
+    print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
+    print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
+    print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
+    print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
+    print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
 
 # run AmpliPy Variants
 def run_variants(trimmed_reads_fn, variants_fn):
