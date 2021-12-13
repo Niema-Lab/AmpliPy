@@ -266,6 +266,8 @@ def create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn):
     pysam.set_verbosity(tmp) # re-enable htslib verbosity
     return in_aln, out_aln
 
+# NOTE TO NIEMA: I think these cigar_to_* and get_pos_on_* functions can be sped up by using functions in pysam.AlignedSegment
+
 # get alignment length from CIGAR
 def cigar_to_query_length(cigar):
     return sum(n for cig,n in cigar if CONSUME_QUERY[cig])
