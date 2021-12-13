@@ -643,7 +643,14 @@ def run_amplipy(untrimmed_reads_fn=None, primer_fn=None, reference_fn=None, trim
     # load input files and preprocess
     if not (run_trim or run_variants or run_consensus):
         error("Not running any of the AmpliPy operations")
-    print_log("Executing AmpliPy (v%s)" % VERSION)
+    if run_trim and not (run_variants or run_consensus):
+        print_log("Executing AmpliPy Trim (v%s)" % VERSION)
+    elif run_variants and not (run_trim or run_consensus):
+        print_log("Executing AmpliPy Variants (v%s)" % VERSION)
+    elif run_consensus and not (run_trim or run_variants):
+        print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
+    else:
+        print_log("Executing AmpliPy All-In-One (v%s)" % VERSION)
     if reference_fn is not None:
         print_log("Loading reference genome: %s" % reference_fn)
         ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
