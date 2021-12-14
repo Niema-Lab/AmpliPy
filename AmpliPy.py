@@ -20,7 +20,7 @@ PROGRESS_NUM_READS = 100000
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
-DEFAULT_MIN_DEPTH_VARIANTS = 0
+DEFAULT_MIN_DEPTH_VARIANTS = 1
 DEFAULT_MIN_FREQ_CONSENSUS = 0
 DEFAULT_MIN_FREQ_VARIANTS = 0.03
 DEFAULT_MIN_LENGTH = 30
@@ -49,6 +49,7 @@ ERROR_TEXT_FILE_EXISTS = "File already exists"
 ERROR_TEXT_FILE_NOT_FOUND = "File not found"
 ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
+ERROR_TEXT_INVALID_MIN_DEPTH = "Minimum depth must be positive"
 ERROR_TEXT_INVALID_MIN_FREQ = "Minimum frequency must be between 0 and 1"
 ERROR_TEXT_INVALID_MIN_LENGTH = "Minimum length must be >= 1"
 ERROR_TEXT_INVALID_READ_EXTENSION = "Invalid read mapping extension (should be .sam or .bam)"
@@ -56,7 +57,6 @@ ERROR_TEXT_INVALID_SLIDING_WINDOW_WIDTH = "Sliding window width must be >= 1"
 ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH = "Unknown symbol must be exactly 1 character"
 ERROR_TEXT_INVALID_VCF_EXTENSION = "Invalid variants extension (should be .vcf, .vcf.gz, or .bcf)"
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
-ERROR_TEXT_NEGATIVE_MIN_DEPTH = "Minimum depth must be non-negative"
 ERROR_TEXT_NEGATIVE_MIN_QUALITY = "Minimum quality must be non-negative"
 ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET = "Primer position offset must be non-negative"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
@@ -205,7 +205,7 @@ def load_ref_genome(reference_fn):
     f = open(reference_fn, mode='r', buffering=BUFSIZE); ref_lines = f.read().strip().splitlines(); f.close()
     if len(ref_lines) < 2 or not ref_lines[0].startswith('>'):
         error("%s: %s" % (ERROR_TEXT_INVALID_FASTA, reference_fn))
-    ref_genome_ID = ref_lines[0][1:].strip()
+    ref_genome_ID = ref_lines[0][1:].split()[0].strip()
     ref_genome_sequence = ''.join(ref_lines[i] for i in range(1,len(ref_lines)))
     if '>' in ref_genome_sequence:
         error("%s: %s" % (ERROR_TEXT_MULTIPLE_REF_SEQS, reference_fn))
@@ -232,12 +232,13 @@ def load_primers(primer_fn):
         except:
             error("%s: %s" % (ERROR_TEXT_INVALID_BED_LINE, l))
     if len(primers) == 0:
+        header.add_sample('sample')
         error("%s: %s" % (ERROR_TEXT_EMPTY_BED, primer_fn))
     primers.sort() # shouldn't be necessary (BED should be sorted), but just in case
     return primers
 
 # create 
-def create_VariantFile_object(output_variants_fn=None):
+def create_VariantFile_object(output_variants_fn=None, ref_genome_ID=None):
     '''Create ``pysam.VariantFile`` object for the output VCF file
 
     Args:
@@ -246,14 +247,28 @@ def create_VariantFile_object(output_variants_fn=None):
     Returns:
         ``pysam.VariantFile``: Stream for writing output VCF
     '''
+    # build VCF header
+    header = pysam.VariantHeader()
+    header.add_sample('sample')
+    header.add_meta(key='AmpliPyVersion', value=VERSION)
+    header.add_meta(key='source', value=' '.join(argv))
+    header.add_meta(key='contig', items=[('ID',ref_genome_ID)])
+    header.add_meta(key='FORMAT', items=[('ID','GT'), ('Number','1'), ('Type','String'), ('Description',"Genotype")])
+    header.add_meta(key='INFO', items=[('ID','DP'), ('Number',1), ('Type','Integer'), ('Description',"Total Depth")])
+    header.add_meta(key='INFO', items=[('ID','REF_DP'), ('Number','1'), ('Type','Integer'), ('Description',"Depth of reference base")])
+    header.add_meta(key='INFO', items=[('ID','ALT_DP'), ('Number','1'), ('Type','Integer'), ('Description',"Depth of alternate base")])
+    header.add_meta(key='INFO', items=[('ID','REF_FREQ'), ('Number','1'), ('Type','Float'), ('Description',"Frequency of reference base")])
+    header.add_meta(key='INFO', items=[('ID','ALT_FREQ'), ('Number','1'), ('Type','Float'), ('Description',"Frequency of alternate base")])
+
+    # open VCF file
     if output_variants_fn is None:
         return None
     elif output_variants_fn.lower() == 'stdout':
-        return pysam.VariantFile('-', 'w')
+        return pysam.VariantFile('-', 'w', header=header)
     elif isfile(output_variants_fn):
         error("%s: %s" % (ERROR_TEXT_FILE_EXISTS, output_variants_fn))
     elif output_variants_fn.lower().endswith('.vcf') or output_variants_fn.lower().endswith('.vcf.gz') or output_variants_fn.lower().endswith('.bcf'):
-        return pysam.VariantFile(output_variants_fn, 'w')
+        return pysam.VariantFile(output_variants_fn, 'w', header=header)
     else:
         error("%s: %s" % (ERROR_TEXT_INVALID_VCF_EXTENSION, output_variants_fn))
 
@@ -724,9 +739,9 @@ def run_amplipy(
     if min_freq_variants is not None and (min_freq_variants < 0 or min_freq_variants > 1):
         error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_variants))
     if min_depth_consensus is not None and min_depth_consensus < 0:
-        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_DEPTH, min_depth_consensus))
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_consensus))
     if min_depth_variants is not None and min_depth_variants < 0:
-        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_DEPTH, min_depth_variants))
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_variants))
     if unknown_symbol is not None and len(unknown_symbol) != 1:
         error("%s: %s" % (ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH, unknown_symbol))
 
@@ -762,7 +777,7 @@ def run_amplipy(
         in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
     if variants_fn is not None:
         print_log("Output variants VCF: %s" % variants_fn)
-        out_vcf = create_VariantFile_object(variants_fn)
+        out_vcf = create_VariantFile_object(variants_fn, ref_genome_ID)
 
     # initialize counters
     NUM_UNMAPPED = 0
@@ -823,6 +838,7 @@ def run_amplipy(
             query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
             query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
             query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
+            query_qual = s.query_qualities
             ref_start = s.reference_start # 0-based leftmost coordinate
             ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
             pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
@@ -834,6 +850,10 @@ def run_amplipy(
                 # deletion
                 if q_pos is None:
                     symbol_counts_at_ref_pos[r_pos]['-'] += 1
+
+                # too low of quality (so ignore)
+                elif query_qual[q_pos] < min_quality:
+                    continue
 
                 # soft-clipped beginning (so ignore)
                 elif q_pos < query_start:
@@ -847,7 +867,7 @@ def run_amplipy(
                 elif r_pos is None:
                     # search for next reference match
                     q_pos_insertion_start = q_pos
-                    while q_pos < query_end and r_pos is None:
+                    while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
                         q_pos, r_pos = pos_pairs[i]; i += 1
                     insertion_seq = query_seq[q_pos_insertion_start : q_pos] # end needs to be exclusive because this is the NEXT match
                     if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
@@ -862,15 +882,53 @@ def run_amplipy(
 
                 # match/mismatch
                 else:
-                    symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
+                    if query_qual[q_pos] >= min_quality:
+                        symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
 
-    # call variants (if applicable)
-    if run_variants:
-        error("NEED TO IMPLEMENT VARIANT CALLING")
+    # call variants and/or consensus (if applicable)
+    if run_variants or run_consensus:
+        if run_consensus:
+            symbols = list()
+        for ref_pos in range(ref_genome_len + 1):
+            # get symbol counts
+            ref_symbol = ref_genome_sequence[ref_pos]
+            curr_symbol_counts_insertions = symbol_counts_insertions[ref_pos]
+            curr_symbol_counts_insertions_depth = sum(curr_symbol_counts_insertions.values())
+            curr_symbol_counts_at_ref_pos = symbol_counts_at_ref_pos[ref_pos]
+            curr_symbol_counts_at_ref_pos_alts = sorted(set(curr_symbol_counts_at_ref_pos.keys()) - {ref_symbol})
+            curr_symbol_counts_at_ref_pos_depth = sum(curr_symbol_counts_at_ref_pos.values())
 
-    # produce consensus (if applicable)
-    if run_consensus:
-        error("NEED TO IMPLEMENT CONSENSUS")
+            # call variants
+            if run_variants:
+                # handle insertion BEFORE ref_pos
+                if curr_symbol_counts_insertions_depth != 0:
+                    alleles = [(curr_symbol_counts_insertions[k], curr_symbol_counts_insertions[k]/curr_symbol_counts_insertions_depth, k) for k in curr_symbol_counts_insertions]
+                    alleles = [tup for tup in alleles if tup[0] > min_depth_variants and tup[1] > min_freq_variants] # filter out by depth/freq
+                    if len(alleles) != 0:
+                        if ref_pos == 0:
+                            allele_symbols = ['.'] + [k for c,f,k in alleles]
+                        else:
+                            prev_ref_symbol = ref_genome_sequence[ref_pos-1]
+                            allele_symbols = [prev_ref_symbol] + ['%s%s' % (prev_ref_symbol,k) for c,f,k in alleles]
+                        vcf_info = {'DP':curr_symbol_counts_insertions_depth}
+                        vcf_record = out_vcf.new_record(contig=ref_genome_ID, start=ref_pos-1, stop=ref_pos, alleles=allele_symbols, info=vcf_info, filter='PASS')
+                        vcf_record.samples['sample']['GT'] = tuple(range(1,len(allele_symbols)))
+                        out_vcf.write(vcf_record)
+                        exit()
+
+            '''
+            # handle symbol_counts_insertions[ref_pos], which is insertions JUST BEFORE ref_pos
+            if run_variants:
+                pass # TODO
+            if run_consensus:
+                error("NEED TO IMPLEMENT CONSENSUS")
+            if run_variants and curr_depth >= min_depth_variants and curr_most_frequent_freq >= min_freq_variants:
+                #out_vcf.write()
+                out_vcf.write(out_vcf.new_record(contig=ref_genome_ID, start=ref_pos, stop=ref_pos+1, alleles=()))
+                exit()
+            if ref_pos != ref_genome_len:
+                pass # TODO handle symbol_counts_at_ref_pos[ref_pos], which is symbols AT ref_pos
+            '''
 
     # finish up
     print_log("Finished Processing %d reads" % s_i)
