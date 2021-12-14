@@ -49,9 +49,16 @@ ERROR_TEXT_FILE_EXISTS = "File already exists"
 ERROR_TEXT_FILE_NOT_FOUND = "File not found"
 ERROR_TEXT_INVALID_BED_LINE = "Invalid primer BED line"
 ERROR_TEXT_INVALID_FASTA = "Invalid FASTA file"
+ERROR_TEXT_INVALID_MIN_FREQ = "Minimum frequency must be between 0 and 1"
+ERROR_TEXT_INVALID_MIN_LENGTH = "Minimum length must be >= 1"
 ERROR_TEXT_INVALID_READ_EXTENSION = "Invalid read mapping extension (should be .sam or .bam)"
+ERROR_TEXT_INVALID_SLIDING_WINDOW_WIDTH = "Sliding window width must be >= 1"
+ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH = "Unknown symbol must be exactly 1 character"
 ERROR_TEXT_INVALID_VCF_EXTENSION = "Invalid variants extension (should be .vcf, .vcf.gz, or .bcf)"
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
+ERROR_TEXT_NEGATIVE_MIN_DEPTH = "Minimum depth must be non-negative"
+ERROR_TEXT_NEGATIVE_MIN_QUALITY = "Minimum quality must be non-negative"
+ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET = "Primer position offset must be non-negative"
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
 HELP_TEXT_MIN_DEPTH_CONSENSUS = "Minimum depth to call consensus"
@@ -703,6 +710,26 @@ def run_amplipy(
 
         ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
     '''
+    # validity check for non-file arguments
+    if primer_pos_offset is not None and primer_pos_offset < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET, primer_pos_offset))
+    if min_length is not None and min_length < 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_LENGTH, min_length))
+    if min_quality is not None and min_quality < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_QUALITY, min_quality))
+    if sliding_window_width is not None and sliding_window_width < 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_SLIDING_WINDOW_WIDTH, sliding_window_width))
+    if min_freq_consensus is not None and (min_freq_consensus < 0 or min_freq_consensus > 1):
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_consensus))
+    if min_freq_variants is not None and (min_freq_variants < 0 or min_freq_variants > 1):
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_variants))
+    if min_depth_consensus is not None and min_depth_consensus < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_DEPTH, min_depth_consensus))
+    if min_depth_variants is not None and min_depth_variants < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_DEPTH, min_depth_variants))
+    if unknown_symbol is not None and len(unknown_symbol) != 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH, unknown_symbol))
+
     # print AmpliPy mode details
     if not (run_trim or run_variants or run_consensus):
         error("Not running any of the AmpliPy operations")
