@@ -415,9 +415,9 @@ def get_pos_on_query(cigar, ref_pos, ref_start):
 def fix_cigar(new_cigar):
     if not isinstance(new_cigar, list):
         new_cigar = list(new_cigar)
-    proper_cigar = list()
-    for i in range(len(new_cigar)):
-        if i < len(new_cigar)-1 and new_cigar[i][0] == new_cigar[i+1][0]:
+    proper_cigar = list(); len_new_cigar = len(new_cigar)
+    for i in range(len_new_cigar):
+        if i < len_new_cigar-1 and new_cigar[i][0] == new_cigar[i+1][0]:
             new_cigar[i+1] = (new_cigar[i+1][0], new_cigar[i][1] + new_cigar[i+1][1]); continue
         proper_cigar.append(new_cigar[i])
     return proper_cigar
@@ -560,7 +560,7 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
     # set things up for quality trimming
     qual = s.query_alignment_qualities
     total = 0; true_start = 0; true_end = len(qual)
-    window = min(sliding_window_width, len(qual))
+    window = min(sliding_window_width, true_end)
 
     # quality trim (reverse strand, so trim from beginning)
     if s.is_reverse:
@@ -883,8 +883,9 @@ def run_amplipy(
             ref_start = s.reference_start # 0-based leftmost coordinate
             ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
             pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
+            len_pos_pairs = len(pos_pairs)
             i = 0
-            while i < len(pos_pairs):
+            while i < len_pos_pairs:
                 # get this pair and move to next
                 q_pos, r_pos = pos_pairs[i]; i += 1
 
