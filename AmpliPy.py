@@ -945,6 +945,14 @@ def run_amplipy(
                         vcf_record.samples['sample']['GT'] = tuple(range(1, len(alt_allele_symbols)+1))
                     out_vcf.write(vcf_record)
 
+    # write consensus sequence to disk (if applicable)
+    if run_consensus:
+        if consensus_fn.lower().endswith('.gz'):
+            f = gzip.open(consensus_fn, 'wb')
+        else:
+            f = open(consensus_fn, 'w')
+        f.write('>sample\n%s\n' % ''.join(consensus_symbols)); f.close()
+
     # finish up
     print_log("Finished Processing %d reads" % s_i)
     print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
