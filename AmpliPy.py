@@ -256,9 +256,9 @@ def create_VariantFile_object(output_variants_fn=None, ref_genome_ID=None):
     header.add_meta(key='FORMAT', items=[('ID','GT'), ('Number','1'), ('Type','String'), ('Description',"Genotype")])
     header.add_meta(key='INFO', items=[('ID','DP'), ('Number',1), ('Type','Integer'), ('Description',"Total Depth")])
     header.add_meta(key='INFO', items=[('ID','REF_DP'), ('Number','1'), ('Type','Integer'), ('Description',"Depth of reference base")])
-    header.add_meta(key='INFO', items=[('ID','ALT_DP'), ('Number','1'), ('Type','Integer'), ('Description',"Depth of alternate base")])
+    header.add_meta(key='INFO', items=[('ID','ALT_DP'), ('Number','1'), ('Type','String'), ('Description',"Depth of alternate base")])
     header.add_meta(key='INFO', items=[('ID','REF_FREQ'), ('Number','1'), ('Type','Float'), ('Description',"Frequency of reference base")])
-    header.add_meta(key='INFO', items=[('ID','ALT_FREQ'), ('Number','1'), ('Type','Float'), ('Description',"Frequency of alternate base")])
+    header.add_meta(key='INFO', items=[('ID','ALT_FREQ'), ('Number','1'), ('Type','String'), ('Description',"Frequency of alternate base")])
 
     # open VCF file
     if output_variants_fn is None:
@@ -662,6 +662,24 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
     return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
+# get the alleles at a given reference position from the symbol counts at that position
+def alleles_from_counts(symbol_counts):
+    '''Get the alleles at a given reference position from the symbol counts at that position
+
+    Args:
+        ``symbol_counts`` (``dict``): The symbol counts at a position of the reference (keys = symbols, values = counts)
+
+    Returns:
+        ``int``: The total coverage at the reference position
+
+        ``list`` of ``(int,float,str)``: The alleles at the reference position as a ``list`` of ``(count, frequency, symbol)`` tuples, sorted in descending order of count
+    '''
+    total_coverage = sum(symbol_counts.values())
+    if total_coverage == 0:
+        return 0, list()
+    else:
+        return total_coverage, sorted(((symbol_counts[k], symbol_counts[k]/total_coverage, k) for k in symbol_counts if symbol_counts[k] != 0), reverse=True)
+
 # run AmpliPy
 def run_amplipy(
     untrimmed_reads_fn = None,
@@ -869,7 +887,10 @@ def run_amplipy(
                     q_pos_insertion_start = q_pos
                     while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
                         q_pos, r_pos = pos_pairs[i]; i += 1
-                    insertion_seq = query_seq[q_pos_insertion_start : q_pos] # end needs to be exclusive because this is the NEXT match
+                    if r_pos == 0:
+                        insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
+                    else:
+                        insertion_seq = query_seq[q_pos_insertion_start - 1 : q_pos] # end needs to be exclusive because this is the NEXT match, and I need to include the letter JUST BEFORE the insertion for the sake of variant calling
                     if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
                         ref_insertion_pos = ref_end
                     else: # otherwise, this is a normal insertion before r_pos
@@ -887,48 +908,62 @@ def run_amplipy(
 
     # call variants and/or consensus (if applicable)
     if run_variants or run_consensus:
+        # handle insertions before the first letter of the reference
+        symbol_counts_inserted_beginning = symbol_counts_insertions[0]
+        total_depth_inserted_beginning, alleles_inserted_beginning = alleles_from_counts(symbol_counts_inserted_beginning)
         if run_consensus:
-            symbols = list()
-        for ref_pos in range(ref_genome_len + 1):
+            if len(alleles_inserted_beginning) != 0 and alleles_inserted_beginning[0][0] >= min_depth_consensus and alleles_inserted_beginning[0][1] >= min_freq_consensus:
+                consensus_symbols = [alleles_inserted_beginning[0][2][:-1]] # need to remove last character because I added it for the sake of VCF
+            else:
+                consensus_symbols = list()
+
+        # handle all positions
+        for ref_pos in range(ref_genome_len):
             # get symbol counts
             ref_symbol = ref_genome_sequence[ref_pos]
-            curr_symbol_counts_insertions = symbol_counts_insertions[ref_pos]
-            curr_symbol_counts_insertions_depth = sum(curr_symbol_counts_insertions.values())
-            curr_symbol_counts_at_ref_pos = symbol_counts_at_ref_pos[ref_pos]
-            curr_symbol_counts_at_ref_pos_alts = sorted(set(curr_symbol_counts_at_ref_pos.keys()) - {ref_symbol})
-            curr_symbol_counts_at_ref_pos_depth = sum(curr_symbol_counts_at_ref_pos.values())
+            symbol_counts_here = symbol_counts_at_ref_pos[ref_pos]
+            total_depth_at_ref_pos, alleles_at_ref_pos = alleles_from_counts(symbol_counts_here)
+            symbol_counts_inserted_after_here = symbol_counts_insertions[ref_pos+1]
+            total_depth_inserted_after_ref_pos, alleles_inserted_after_ref_pos = alleles_from_counts(symbol_counts_inserted_after_here)
 
-            # call variants
-            if run_variants:
-                # handle insertion BEFORE ref_pos
-                if curr_symbol_counts_insertions_depth != 0:
-                    alleles = [(curr_symbol_counts_insertions[k], curr_symbol_counts_insertions[k]/curr_symbol_counts_insertions_depth, k) for k in curr_symbol_counts_insertions]
-                    alleles = [tup for tup in alleles if tup[0] > min_depth_variants and tup[1] > min_freq_variants] # filter out by depth/freq
-                    if len(alleles) != 0:
-                        if ref_pos == 0:
-                            allele_symbols = ['.'] + [k for c,f,k in alleles]
-                        else:
-                            prev_ref_symbol = ref_genome_sequence[ref_pos-1]
-                            allele_symbols = [prev_ref_symbol] + ['%s%s' % (prev_ref_symbol,k) for c,f,k in alleles]
-                        vcf_info = {'DP':curr_symbol_counts_insertions_depth}
-                        vcf_record = out_vcf.new_record(contig=ref_genome_ID, start=ref_pos-1, stop=ref_pos, alleles=allele_symbols, info=vcf_info, filter='PASS')
-                        vcf_record.samples['sample']['GT'] = tuple(range(1,len(allele_symbols)))
-                        out_vcf.write(vcf_record)
-                        exit()
-
-            '''
-            # handle symbol_counts_insertions[ref_pos], which is insertions JUST BEFORE ref_pos
-            if run_variants:
-                pass # TODO
+            # if calling consensus, add current position and insertions after current position
             if run_consensus:
-                error("NEED TO IMPLEMENT CONSENSUS")
-            if run_variants and curr_depth >= min_depth_variants and curr_most_frequent_freq >= min_freq_variants:
-                #out_vcf.write()
-                out_vcf.write(out_vcf.new_record(contig=ref_genome_ID, start=ref_pos, stop=ref_pos+1, alleles=()))
-                exit()
-            if ref_pos != ref_genome_len:
-                pass # TODO handle symbol_counts_at_ref_pos[ref_pos], which is symbols AT ref_pos
-            '''
+                if len(alleles_at_ref_pos) != 0 and alleles_at_ref_pos[0][0] >= min_depth_consensus and alleles_at_ref_pos[0][1] >= min_freq_consensus:
+                    consensus_symbols.append(alleles_at_ref_pos[0][2])
+                else:
+                    consensus_symbols.append(unknown_symbol)
+                if len(alleles_inserted_after_ref_pos) != 0 and alleles_inserted_after_ref_pos[0][0] >= min_depth_consensus and alleles_inserted_after_ref_pos[0][1] >= min_freq_consensus:
+                    consensus_symbols.append(alleles_inserted_after_ref_pos[0][2][1:]) # need to remove first character because I added it for the sake of VCF
+
+            # if calling variants, form and write VCF entry
+            if run_variants:
+                ref_symbol_count = 0; ref_symbol_freq = 0; alt_allele_symbols = list(); alt_allele_counts = list(); alt_allele_freqs = list()
+                if ref_pos == 0:
+                    allele_lists = [alleles_inserted_beginning, alleles_at_ref_pos, alleles_inserted_after_ref_pos]
+                else:
+                    allele_lists = [alleles_at_ref_pos, alleles_inserted_after_ref_pos]
+                for allele_list in allele_lists:
+                    for count, freq, symbol in allele_list:
+                        if symbol == ref_symbol:
+                            ref_symbol_count = count; ref_symbol_freq = freq
+                        elif count >= min_depth_variants and freq >= min_freq_variants: # TODO should count be >= min_depth_variants? or total depth at this site?
+                            alt_allele_symbols.append(symbol); alt_allele_counts.append(count); alt_allele_freqs.append(freq)
+                if len(alt_allele_symbols) != 0:
+                    vcf_info = dict()
+                    if ref_pos == 0 and total_depth_inserted_beginning != 0:
+                        vcf_info['DP'] = total_depth_inserted_beginning + total_depth_at_ref_pos + total_depth_inserted_after_ref_pos
+                    else:
+                        vcf_info['DP'] = total_depth_at_ref_pos + total_depth_inserted_after_ref_pos
+                    vcf_info['REF_DP'] = ref_symbol_count
+                    vcf_info['ALT_DP'] = ','.join(str(count) for count in alt_allele_counts)
+                    vcf_info['REF_FREQ'] = ref_symbol_freq
+                    vcf_info['ALT_FREQ'] = ','.join(str(freq) for freq in alt_allele_freqs)
+                    vcf_record = out_vcf.new_record(contig=ref_genome_ID, start=ref_pos, stop=ref_pos+1, alleles=[ref_symbol]+alt_allele_symbols, info=vcf_info, filter='PASS')
+                    if ref_symbol_count >= min_depth_variants and ref_symbol_freq >= min_freq_variants:
+                        vcf_record.samples['sample']['GT'] = tuple(range(len(alt_allele_symbols)+1))
+                    else:
+                        vcf_record.samples['sample']['GT'] = tuple(range(1, len(alt_allele_symbols)+1))
+                    out_vcf.write(vcf_record)
 
     # finish up
     print_log("Finished Processing %d reads" % s_i)
