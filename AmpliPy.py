@@ -89,6 +89,26 @@ def error(s=None):
         print_log("ERROR: %s" % s)
     exit(1)
 
+# get alignment (for debugging)
+def get_alignment(s, ref_genome_sequence=None):
+    q = ''; r = ''
+    for q_pos, r_pos in s.get_aligned_pairs():
+        if q_pos is not None and q_pos < s.query_alignment_start:
+            continue
+        if q_pos is not None and q_pos >= s.query_alignment_end:
+            break
+        if q_pos is None:
+            q += '-'
+        else:
+            q += s.query_sequence[q_pos]
+        if r_pos is None:
+            r += '-'
+        elif ref_genome_sequence is None:
+            r += '?'
+        else:
+            r += ref_genome_sequence[r_pos]
+    return q, r
+
 # parse user args
 def parse_args():
     # prep arg parser
@@ -481,6 +501,10 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
                 if del_len == 0 and CONSUME_QUERY[new_cigar[-1][0]] and CONSUME_REF[new_cigar[-1][0]]:
                     pos_start = True
 
+            # If we didn't consume the query but did consume the reference, still need to move start
+            elif CONSUME_REF[cig]:
+                ref_add += n
+
             # If our trim consumed the reference, we need to move our read's start position forwards
             if CONSUME_REF[cig]:
                 start_pos += ref_add
@@ -564,7 +588,7 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
 
         # Initialization for quality trimming
         new_cigar = list(); del_len = i
-        start_pos = get_pos_on_ref(s.cigartuples, del_len + s.query_alignment_start, s.reference_start)
+        start_pos = get_pos_on_ref(s.cigartuples, del_len + s.query_alignment_start - 1, s.reference_start)
 
         # Do we need to trim?
         if start_pos > s.reference_start:
