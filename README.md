@@ -1,36 +1,21 @@
 # AmpliPy
 
-Python implementation of viral trimming + variant calling, similar to iVar
+Python implementation of amplicon viral trimming + variant calling + consensus sequence calling, similar to [iVar](https://github.com/andersen-lab/ivar).
 
-## Development Process
+## Installation
+ViralMSA is written in Python 3 and depends on [pysam](https://pysam.readthedocs.io/). You can simply download [AmpliPy.py](AmpliPy.py) to your machine and make it executable:
 
-Clone the repo locally, and make a branch prefixed by your name, then the feature / bug fix you're working on.
-
-e.g. `ronak/multiprocessing`
-
-To get feedback on your code changes, make a [draft pull request](https://github.com/Niema-Lab/AmpliPy/compare) and request a review.
-
-## Dependencies
-
-- pysamy
-- autopep8 (development only)
-
-Install all dependencies by `pip install -r requirements.txt`
+```bash
+wget "https://raw.githubusercontent.com/Niema-Lab/AmpliPy/master/AmpliPy.py"
+chmod a+x AmpliPy.py
+sudo mv AmpliPy.py /usr/local/bin/AmpliPy.py # optional step to install globally
+```
 
 ## Usage
-
-    usage: python amplipy.py [-h] [-d] {trim,variant} ...
-
-    positional arguments:
-    {trim,variant}
-
-    optional arguments:
-    -h, --help      show this help message and exit
-    -d              Enable debug mode for extra output
+We will update this section soon 😅
 
 ## Contributors
-
 - [Josh Cross](https://github.com/TheCrossBoy)
 - [Niya Shao](https://github.com/Doreen0Niya)
 - [Ronak Shah](https://github.com/trulyronak)
-- [Niema Moshiri](https://github.com/niemasd)
+- [Niema Moshiri](https://niema.net)
