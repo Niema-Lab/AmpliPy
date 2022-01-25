@@ -5,13 +5,17 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 
 # imports
 import argparse
+from functools import partial
 import gzip
+from itertools import repeat
 import pickle
+import threading
 import pysam
 from collections import deque
 from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
+import multiprocessing as mp
 
 # constants
 VERSION = '0.0.1'
@@ -684,7 +688,7 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
 
             # update our alignment accordingly
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
-    return trimmed_primer_start, trimmed_primer_end, trimmed_quality
+    return trimmed_primer_start, trimmed_primer_end, trimmed_quality, s
 
 # get the alleles at a given reference position from the symbol counts at that position
 def alleles_from_counts(symbol_counts):
@@ -703,6 +707,11 @@ def alleles_from_counts(symbol_counts):
         return 0, list()
     else:
         return total_coverage, sorted(((symbol_counts[k], symbol_counts[k]/total_coverage, k) for k in symbol_counts if symbol_counts[k] != 0), reverse=True)
+
+# mp initializer — https://stackoverflow.com/a/28721419
+def init_child(lock_):
+    global lock
+    lock = lock_
 
 # run AmpliPy
 def run_amplipy(
@@ -836,6 +845,72 @@ def run_amplipy(
     if run_variants or run_consensus:
         symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
 
+    # todo: add multiprocessing code for trimming here
+    print("starting mp code")
+    total_processed = []
+    sem = threading.Semaphore()
+    def process_distributor(queue, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width):
+        # if we have added all jobs and we have no jobs left to do, break
+        while not (signal_queue.empty() and not queue.empty()):
+            sem.acquire()
+            pickled_read = queue.get()
+            read = pysam.AlignmentFile.fromstring(read)
+            trim_read(read, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
+            print("finished")
+            total_processed.append(0)
+    m = mp.Manager()
+    queued_jobs = m.Queue()
+    signal_queue = m.Queue()
+
+    distributor1 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
+    distributor2 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
+    distributor3 = mp.Process(target=process_distributor,
+                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
+    print("setup distributors")
+    distributor1.start()
+    distributor2.start()
+    distributor3.start()
+
+    print('starting distributors, about to iterate')
+
+    for s in in_aln:
+        queued_jobs.put(s.to_string())
+        sem.release()
+    print("completed distribution, we're now going to wait for everyhting to finish")
+    signal_queue.put(True)  # signals to all that we're done
+    distributor1.join()
+    distributor2.join()
+    distributor3.join()
+    print("completed distributing " + str(len(total_processed)))
+
+    # naive attempt 1
+    # lock = mp.Lock()
+    # poolsize = 4
+    # with mp.Pool(poolsize, initializer=init_child, initargs=(lock,)) as pool:
+    #     print("created pool for mp, running starmap")
+    #     results = pool.starmap(trim_read, zip(in_aln, repeat(min_primer_start), repeat(max_primer_end), repeat(max_primer_len), repeat(min_quality), repeat(sliding_window_width)))
+    #     print("mp is complete, we got " + str(len(results)) + " back")
+    #     for (trimmed_primer_start, trimmed_primer_end, trimmed_quality, s) in results:
+    #         print("deciding whether to print shit now")
+    #         if trimmed_primer_start:
+    #             NUM_TRIMMED_PRIMER_START += 1
+    #         if trimmed_primer_end:
+    #             NUM_TRIMMED_PRIMER_END += 1
+    #         if trimmed_quality:
+    #             NUM_TRIMMED_QUALITY += 1
+
+    #         # write this read (if applicable)
+    #         write_read = True
+    #         if s.reference_length < min_length:
+    #             NUM_TOO_SHORT += 1; write_read = False
+    #         if not (trimmed_primer_start or trimmed_primer_end):
+    #             NUM_UNTRIMMED_PRIMER += 1
+    #             if not include_no_primer:
+    #                 write_read = False
+    #         if write_read:
+    #             out_aln.write(s); NUM_WRITTEN += 1
     # process reads
     print_log("Processing reads...")
     s_i = 0
