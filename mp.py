@@ -1,5 +1,7 @@
 import threading
 import multiprocessing as mp
+from time import time
+import numpy as np
 
 sem = threading.Semaphore
 
@@ -15,7 +17,8 @@ def process_distributor(queue, signal_queue):
 		process_read(read)
 
 def main():
-	bam = []
+	bam = np.random.rand(1000)
+	time_start = time()
 	m = mp.Manager()
 	queued_jobs = m.Queue()
 	signal_queue = m.Queue()
@@ -34,3 +37,19 @@ def main():
 	for read in bam:
 		queued_jobs.put(read)
 		sem.release()
+	distributor1.join()
+	distributor2.join()
+	distributor3.join()
+
+	time_end = time.time()
+	print("mp took " + str(time_end - time_start))
+
+	# linear approach
+	time_start = time.time()
+	for read in bam:
+		process_read(read)
+	
+	time_end = time.time()
+	print("linear took " + str(time_end - time_start))
+
+main()

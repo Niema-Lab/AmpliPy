@@ -853,8 +853,9 @@ def run_amplipy(
         # if we have added all jobs and we have no jobs left to do, break
         while not (signal_queue.empty() and not queue.empty()):
             sem.acquire()
+            print("we got a read")
             pickled_read = queue.get()
-            read = pysam.AlignmentFile.fromstring(read)
+            read = pysam.AlignmentFile.fromstring(pickled_read)
             trim_read(read, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
             print("finished")
             total_processed.append(0)
@@ -878,13 +879,14 @@ def run_amplipy(
     for s in in_aln:
         queued_jobs.put(s.to_string())
         sem.release()
-    print("completed distribution, we're now going to wait for everyhting to finish")
+    print("completed distribution, we're now going to wait for everything to finish")
     signal_queue.put(True)  # signals to all that we're done
     distributor1.join()
     distributor2.join()
     distributor3.join()
+    print(queued_jobs.empty())
+    print(queued_jobs.join())
     print("completed distributing " + str(len(total_processed)))
-
     # naive attempt 1
     # lock = mp.Lock()
     # poolsize = 4
