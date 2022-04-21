@@ -5,22 +5,21 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 
 # imports
 import argparse
-from functools import partial
 import gzip
-from itertools import repeat
 import pickle
-import threading
 import pysam
 from collections import deque
 from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
-import multiprocessing as mp
+import time
 
 # constants
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
+QUEUE_SIGNAL_END = -1
+QUEUE_SIGNAL_WRITE_
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
@@ -688,7 +687,7 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
 
             # update our alignment accordingly
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
-    return trimmed_primer_start, trimmed_primer_end, trimmed_quality, s
+    return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
 # get the alleles at a given reference position from the symbol counts at that position
 def alleles_from_counts(symbol_counts):
@@ -708,10 +707,106 @@ def alleles_from_counts(symbol_counts):
     else:
         return total_coverage, sorted(((symbol_counts[k], symbol_counts[k]/total_coverage, k) for k in symbol_counts if symbol_counts[k] != 0), reverse=True)
 
-# mp initializer — https://stackoverflow.com/a/28721419
-def init_child(lock_):
-    global lock
-    lock = lock_
+def run_amplipy_worker(input_queue, output_queue):
+    # print progress update
+    while True:
+        s = input_queue.get()
+        if s == QUEUE_SIGNAL_END:
+            break
+        s_i += 1
+        if s_i % PROGRESS_NUM_READS == 0:
+            print_log("Processed %d reads..." % s_i)
+
+        # skip unmapped reads
+        if s.is_unmapped:
+            NUM_UNMAPPED += 1; continue
+
+        # skip reads without CIGAR
+        if s.cigartuples is None:
+            NUM_NO_CIGAR += 1; continue
+
+        # trim this read (if applicable)
+        if run_trim:
+            trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
+            if trimmed_primer_start:
+                NUM_TRIMMED_PRIMER_START += 1
+            if trimmed_primer_end:
+                NUM_TRIMMED_PRIMER_END += 1
+            if trimmed_quality:
+                NUM_TRIMMED_QUALITY += 1
+
+            # write this read (if applicable)
+            write_read = True
+            if s.reference_length < min_length:
+                NUM_TOO_SHORT += 1; write_read = False
+            if not (trimmed_primer_start or trimmed_primer_end):
+                NUM_UNTRIMMED_PRIMER += 1
+                if not include_no_primer:
+                    write_read = False
+            if write_read:
+                #out_aln.write(s); NUM_WRITTEN += 1
+                pass
+
+        # if variant/consensus calling, update base counts
+        if run_variants or run_consensus:
+            query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
+            query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
+            query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
+            query_qual = s.query_qualities
+            ref_start = s.reference_start # 0-based leftmost coordinate
+            ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
+            pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
+            len_pos_pairs = len(pos_pairs)
+            i = 0
+            while i < len_pos_pairs:
+                # get this pair and move to next
+                q_pos, r_pos = pos_pairs[i]; i += 1
+
+                # deletion
+                if q_pos is None:
+                    symbol_counts_at_ref_pos[r_pos]['-'] += 1
+
+                # too low of quality (so ignore)
+                elif query_qual[q_pos] < min_quality:
+                    continue
+
+                # soft-clipped beginning (so ignore)
+                elif q_pos < query_start:
+                    continue
+
+                # soft-clipped end (so early terminate)
+                elif q_pos >= query_end:
+                    break
+
+                # insertion
+                elif r_pos is None:
+                    # search for next reference match
+                    q_pos_insertion_start = q_pos
+                    while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
+                        q_pos, r_pos = pos_pairs[i]; i += 1
+                    if r_pos == 0:
+                        insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
+                    else:
+                        insertion_seq = query_seq[q_pos_insertion_start - 1 : q_pos] # end needs to be exclusive because this is the NEXT match, and I need to include the letter JUST BEFORE the insertion for the sake of variant calling
+                    if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
+                        ref_insertion_pos = ref_end
+                    else: # otherwise, this is a normal insertion before r_pos
+                        ref_insertion_pos = r_pos
+                        i -= 1 # I need to handle this reference position next loop
+                    ref_insertion_pos = max(ref_insertion_pos-1, 0) # move back 1
+                    if insertion_seq in symbol_counts_at_ref_pos[ref_insertion_pos]:
+                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] += 1
+                    else:
+                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] = 1
+
+                # match/mismatch
+                else:
+                    if query_qual[q_pos] >= min_quality:
+                        symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
+
+def run_amplipy_writer(output_queue, out_aln, out_vcf):
+    # (read, vcf)
+    print("Writer!")
 
 # run AmpliPy
 def run_amplipy(
@@ -845,168 +940,15 @@ def run_amplipy(
     if run_variants or run_consensus:
         symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
 
-    # todo: add multiprocessing code for trimming here
-    print("starting mp code")
-    total_processed = []
-    sem = threading.Semaphore()
-    def process_distributor(queue, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width):
-        # if we have added all jobs and we have no jobs left to do, break
-        while not (signal_queue.empty() and not queue.empty()):
-            sem.acquire()
-            print("we got a read")
-            pickled_read = queue.get()
-            read = pysam.AlignmentFile.fromstring(pickled_read)
-            trim_read(read, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
-            print("finished")
-            total_processed.append(0)
-    m = mp.Manager()
-    queued_jobs = m.Queue()
-    signal_queue = m.Queue()
-
-    distributor1 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
-    distributor2 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
-    distributor3 = mp.Process(target=process_distributor,
-                              args=(queued_jobs, signal_queue, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width))
-    print("setup distributors")
-    distributor1.start()
-    distributor2.start()
-    distributor3.start()
-
-    print('starting distributors, about to iterate')
-
-    for s in in_aln:
-        queued_jobs.put(s.to_string())
-        sem.release()
-    print("completed distribution, we're now going to wait for everything to finish")
-    signal_queue.put(True)  # signals to all that we're done
-    distributor1.join()
-    distributor2.join()
-    distributor3.join()
-    print(queued_jobs.empty())
-    print(queued_jobs.join())
-    print("completed distributing " + str(len(total_processed)))
-    # naive attempt 1
-    # lock = mp.Lock()
-    # poolsize = 4
-    # with mp.Pool(poolsize, initializer=init_child, initargs=(lock,)) as pool:
-    #     print("created pool for mp, running starmap")
-    #     results = pool.starmap(trim_read, zip(in_aln, repeat(min_primer_start), repeat(max_primer_end), repeat(max_primer_len), repeat(min_quality), repeat(sliding_window_width)))
-    #     print("mp is complete, we got " + str(len(results)) + " back")
-    #     for (trimmed_primer_start, trimmed_primer_end, trimmed_quality, s) in results:
-    #         print("deciding whether to print shit now")
-    #         if trimmed_primer_start:
-    #             NUM_TRIMMED_PRIMER_START += 1
-    #         if trimmed_primer_end:
-    #             NUM_TRIMMED_PRIMER_END += 1
-    #         if trimmed_quality:
-    #             NUM_TRIMMED_QUALITY += 1
-
-    #         # write this read (if applicable)
-    #         write_read = True
-    #         if s.reference_length < min_length:
-    #             NUM_TOO_SHORT += 1; write_read = False
-    #         if not (trimmed_primer_start or trimmed_primer_end):
-    #             NUM_UNTRIMMED_PRIMER += 1
-    #             if not include_no_primer:
-    #                 write_read = False
-    #         if write_read:
-    #             out_aln.write(s); NUM_WRITTEN += 1
+    total_a = 0
+    total_b = 0
+    total_c = 0
+    ind = 0
     # process reads
     print_log("Processing reads...")
     s_i = 0
     for s in in_aln:
-        # print progress update
-        s_i += 1
-        if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Processed %d reads..." % s_i)
-
-        # skip unmapped reads
-        if s.is_unmapped:
-            NUM_UNMAPPED += 1; continue
-
-        # skip reads without CIGAR
-        if s.cigartuples is None:
-            NUM_NO_CIGAR += 1; continue
-
-        # trim this read (if applicable)
-        if run_trim:
-            trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
-            if trimmed_primer_start:
-                NUM_TRIMMED_PRIMER_START += 1
-            if trimmed_primer_end:
-                NUM_TRIMMED_PRIMER_END += 1
-            if trimmed_quality:
-                NUM_TRIMMED_QUALITY += 1
-
-            # write this read (if applicable)
-            write_read = True
-            if s.reference_length < min_length:
-                NUM_TOO_SHORT += 1; write_read = False
-            if not (trimmed_primer_start or trimmed_primer_end):
-                NUM_UNTRIMMED_PRIMER += 1
-                if not include_no_primer:
-                    write_read = False
-            if write_read:
-                out_aln.write(s); NUM_WRITTEN += 1
-
-        # if variant/consensus calling, update base counts
-        if run_variants or run_consensus:
-            query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
-            query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
-            query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
-            query_qual = s.query_qualities
-            ref_start = s.reference_start # 0-based leftmost coordinate
-            ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
-            pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
-            len_pos_pairs = len(pos_pairs)
-            i = 0
-            while i < len_pos_pairs:
-                # get this pair and move to next
-                q_pos, r_pos = pos_pairs[i]; i += 1
-
-                # deletion
-                if q_pos is None:
-                    symbol_counts_at_ref_pos[r_pos]['-'] += 1
-
-                # too low of quality (so ignore)
-                elif query_qual[q_pos] < min_quality:
-                    continue
-
-                # soft-clipped beginning (so ignore)
-                elif q_pos < query_start:
-                    continue
-
-                # soft-clipped end (so early terminate)
-                elif q_pos >= query_end:
-                    break
-
-                # insertion
-                elif r_pos is None:
-                    # search for next reference match
-                    q_pos_insertion_start = q_pos
-                    while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
-                        q_pos, r_pos = pos_pairs[i]; i += 1
-                    if r_pos == 0:
-                        insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
-                    else:
-                        insertion_seq = query_seq[q_pos_insertion_start - 1 : q_pos] # end needs to be exclusive because this is the NEXT match, and I need to include the letter JUST BEFORE the insertion for the sake of variant calling
-                    if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
-                        ref_insertion_pos = ref_end
-                    else: # otherwise, this is a normal insertion before r_pos
-                        ref_insertion_pos = r_pos
-                        i -= 1 # I need to handle this reference position next loop
-                    ref_insertion_pos = max(ref_insertion_pos-1, 0) # move back 1
-                    if insertion_seq in symbol_counts_at_ref_pos[ref_insertion_pos]:
-                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] += 1
-                    else:
-                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] = 1
-
-                # match/mismatch
-                else:
-                    if query_qual[q_pos] >= min_quality:
-                        symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
+        
 
     # call variants and/or consensus (if applicable)
     if run_variants or run_consensus:
