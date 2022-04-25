@@ -1,0 +1,6 @@
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:NC_045512.2	LN:29903
+@PG	PN:minimap2	ID:minimap2	VN:2.21-r1071	CL:minimap2 -t 1 -a -x sr n1.r01.s1_output/n1.r01.s1.reference.fas n1.r01.s1_output/n1.r01.s1.fq1.fastq n1.r01.s1_output/n1.r01.s1.fq2.fastq
+@PG	PN:samtools	ID:samtools	VN:1.12	PP:minimap2	CL:samtools view -bS -
+@PG	PN:samtools	ID:samtools.1	VN:1.12	PP:samtools	CL:samtools sort --threads 1 -O bam -o n1.r01.s1_output/n1.r01.s1.untrimmed.sorted.bam n1.r01.s1_output/n1.r01.s1.untrimmed.bam
+@PG	PN:AmpliPy	ID:AmpliPy	VN:0.0.1	PP:samtools.1	CL:./AmpliPy.py trim -p example/example_primers.bed -r example/example_reference.fas -i example/example_untrimmed_sorted.bam -o output_mp.sam
