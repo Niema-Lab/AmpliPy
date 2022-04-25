@@ -13,13 +13,13 @@ from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
 import time
+import multiprocessing as mp
 
 # constants
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
 QUEUE_SIGNAL_END = -1
-QUEUE_SIGNAL_WRITE_
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
@@ -707,23 +707,52 @@ def alleles_from_counts(symbol_counts):
     else:
         return total_coverage, sorted(((symbol_counts[k], symbol_counts[k]/total_coverage, k) for k in symbol_counts if symbol_counts[k] != 0), reverse=True)
 
-def run_amplipy_worker(input_queue, output_queue):
-    # print progress update
+def run_amplipy_worker(
+    input_queue,
+    output_queue,
+    header,
+    run_trim,
+        min_primer_start,
+        max_primer_end,
+        max_primer_len,
+        min_quality,
+        sliding_window_width,
+        min_length,
+        include_no_primer,
+    run_variants,
+    run_consensus,
+        ref_genome_len
+):
+    # Variables it expects to exist, do nothing yet
+    NUM_UNMAPPED = 0
+    NUM_NO_CIGAR = 0
+    NUM_TRIMMED_PRIMER_START = 0
+    NUM_TRIMMED_PRIMER_END = 0
+    NUM_TRIMMED_QUALITY = 0
+    NUM_TOO_SHORT = 0
+    NUM_UNTRIMMED_PRIMER = 0
+    symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)]
+
     while True:
         s = input_queue.get()
         if s == QUEUE_SIGNAL_END:
+            # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+            input_queue.task_done()
             break
-        s_i += 1
-        if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Processed %d reads..." % s_i)
+        s = pysam.AlignedSegment.fromstring(s, header=header)
+        #s_i += 1
+        #if s_i % PROGRESS_NUM_READS == 0:
+            #print_log("Processed %d reads..." % s_i)
+
+        output = [None, None]
 
         # skip unmapped reads
         if s.is_unmapped:
-            NUM_UNMAPPED += 1; continue
+            NUM_UNMAPPED += 1; input_queue.task_done(); continue
 
         # skip reads without CIGAR
         if s.cigartuples is None:
-            NUM_NO_CIGAR += 1; continue
+            NUM_NO_CIGAR += 1; input_queue.task_done(); continue
 
         # trim this read (if applicable)
         if run_trim:
@@ -745,7 +774,7 @@ def run_amplipy_worker(input_queue, output_queue):
                     write_read = False
             if write_read:
                 #out_aln.write(s); NUM_WRITTEN += 1
-                pass
+                output_queue.put(s.to_string())
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
@@ -804,9 +833,17 @@ def run_amplipy_worker(input_queue, output_queue):
                     if query_qual[q_pos] >= min_quality:
                         symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
 
-def run_amplipy_writer(output_queue, out_aln, out_vcf):
-    # (read, vcf)
+        # signal to the queue we are done
+        input_queue.task_done()
+
+def run_amplipy_writer(output_queue, header, out_aln):
+    # s
     print("Writer!")
+    while True:
+        s = output_queue.get()
+        output_queue.task_done()
+        if s == QUEUE_SIGNAL_END:
+            break
 
 # run AmpliPy
 def run_amplipy(
@@ -945,10 +982,72 @@ def run_amplipy(
     total_c = 0
     ind = 0
     # process reads
-    print_log("Processing reads...")
-    s_i = 0
+
+    print_log("Starting processes...")
+
+    # TODO should be a constant
+    MAX_QUEUE = 256
+    
+    input_queue = mp.JoinableQueue(MAX_QUEUE)
+    output_queue = mp.JoinableQueue(MAX_QUEUE)
+
+    # TODO this should be a parameter
+    NUM_PROCESSES = 16
+
+    worker_processes = NUM_PROCESSES - 2
+    processes = []
+    communication = []
+
+    for _ in range(worker_processes):
+        p = mp.Process(target=run_amplipy_worker, args=(input_queue, output_queue, in_aln.header, run_trim, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width, min_length, include_no_primer, run_variants, run_consensus, ref_genome_len,))
+        p.start()
+        processes.append(p)
+
+    writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, "TBD",))
+    writer.start()
+
+    print_log("Reading reads...")
+    i_s = 0
     for s in in_aln:
-        
+        i_s += 1
+        if (i_s % 100 == 0):
+            #print_log("itr: %i" % i_s)
+            #print_log("input: %i" % input_queue.qsize())
+            #print_log("output: %i" % output_queue.qsize())
+            pass
+        input_queue.put(s.to_string())
+
+    print_log("Finished reading!")
+
+    for _ in range(worker_processes):
+        input_queue.put(QUEUE_SIGNAL_END)
+    input_queue.close()
+
+    print_log("Waiting on processing...")
+
+    input_queue.join()
+
+    # TODO move this down
+    print_log("Finished processing!")
+
+    p_i = 0
+    for p in processes:
+        p_i += 1
+        print("Joining %i" % p_i)
+        p.join()
+
+    print_log("Waiting on output...")
+
+    output_queue.put(QUEUE_SIGNAL_END)
+    output_queue.close()
+    output_queue.join()
+
+    print_log("Finished output!")
+
+    print("Joining writer")
+    writer.join()
+
+    print("Joined all processes! Outputting data...")
 
     # call variants and/or consensus (if applicable)
     if run_variants or run_consensus:
