@@ -12,20 +12,14 @@ from collections import deque
 from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
-<<<<<<< HEAD
-=======
 import time
 import multiprocessing as mp
->>>>>>> 90da41e2c72f964b14efde6865b101e1542d7343
 
 # constants
 VERSION = '0.0.1'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
-<<<<<<< HEAD
-=======
 QUEUE_SIGNAL_END = -1
->>>>>>> 90da41e2c72f964b14efde6865b101e1542d7343
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
