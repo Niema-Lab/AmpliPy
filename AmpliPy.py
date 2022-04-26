@@ -836,9 +836,9 @@ def run_amplipy_worker(
         # signal to the queue we are done
         input_queue.task_done()
 
-def run_amplipy_writer(output_queue, header, out_file):
+def run_amplipy_writer(output_queue, header, out_file, in_file):
     # Loop
-    out_aln = pysam.AlignmentFile(out_file, "w", header=header)
+    _, out_aln = create_AlignmentFile_objects(in_file, out_file)
     while True:
         s = output_queue.get()
         if s == QUEUE_SIGNAL_END:
@@ -1012,7 +1012,7 @@ def run_amplipy(
         p.start()
         processes.append(p)
 
-    writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, trimmed_reads_fn,))
+    writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, trimmed_reads_fn, untrimmed_reads_fn))
     writer.start()
 
     print_log("Reading reads...")
