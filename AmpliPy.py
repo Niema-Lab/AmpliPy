@@ -836,15 +836,24 @@ def run_amplipy_worker(
         # signal to the queue we are done
         input_queue.task_done()
 
-def run_amplipy_writer(output_queue, header, out_aln):
-    # s
-    print("Writer!")
+def run_amplipy_writer(output_queue, header, out_file):
+    # Loop
+    out_aln = pysam.AlignmentFile(out_file, "w", header=header)
     while True:
         s = output_queue.get()
-        output_queue.task_done()
         if s == QUEUE_SIGNAL_END:
+            # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+            output_queue.task_done()
             break
+        s = pysam.AlignedSegment.fromstring(s, header=header)
+        # Write
+        out_aln.write(s)
 
+        # Signal to queue this item is processed
+        output_queue.task_done()
+    # Close the output file, so it is written properly
+    out_aln.close()
+    
 # run AmpliPy
 def run_amplipy(
     untrimmed_reads_fn = None,
@@ -954,7 +963,7 @@ def run_amplipy(
     if run_trim:
         print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
         print_log("Output trimmed SAM/BAM: %s" % trimmed_reads_fn)
-        in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
+        in_aln, _ = create_AlignmentFile_objects(untrimmed_reads_fn, None)
     else:
         print_log("Input trimmed SAM/BAM: %s" % trimmed_reads_fn)
         in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
@@ -992,7 +1001,7 @@ def run_amplipy(
     output_queue = mp.JoinableQueue(MAX_QUEUE)
 
     # TODO this should be a parameter
-    NUM_PROCESSES = 16
+    NUM_PROCESSES = 8
 
     worker_processes = NUM_PROCESSES - 2
     processes = []
@@ -1003,7 +1012,7 @@ def run_amplipy(
         p.start()
         processes.append(p)
 
-    writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, "TBD",))
+    writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, trimmed_reads_fn,))
     writer.start()
 
     print_log("Reading reads...")
@@ -1033,7 +1042,7 @@ def run_amplipy(
     p_i = 0
     for p in processes:
         p_i += 1
-        print("Joining %i" % p_i)
+        #print("Joining %i" % p_i)
         p.join()
 
     print_log("Waiting on output...")
@@ -1044,7 +1053,6 @@ def run_amplipy(
 
     print_log("Finished output!")
 
-    print("Joining writer")
     writer.join()
 
     print("Joined all processes! Outputting data...")
@@ -1097,6 +1105,7 @@ def run_amplipy(
         f.write('>sample\n%s\n' % ''.join(consensus_symbols)); f.close()
 
     # finish up
+    s_i = 0
     print_log("Finished Processing %d reads" % s_i)
     print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
     print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
