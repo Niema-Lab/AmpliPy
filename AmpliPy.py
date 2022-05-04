@@ -721,7 +721,10 @@ def run_amplipy_worker(
         include_no_primer,
     run_variants,
     run_consensus,
-        ref_genome_len
+        ref_genome_len,
+        symbol_count_lock,
+        main_thread_symbol_counts,
+        communication_queue
 ):
     # Variables it expects to exist, do nothing yet
     NUM_UNMAPPED = 0
@@ -736,8 +739,7 @@ def run_amplipy_worker(
     while True:
         s = input_queue.get()
         if s == QUEUE_SIGNAL_END:
-            # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
-            input_queue.task_done()
+            # Get out of loop and do our wrapup
             break
         s = pysam.AlignedSegment.fromstring(s, header=header)
         #s_i += 1
@@ -835,6 +837,50 @@ def run_amplipy_worker(
 
         # signal to the queue we are done
         input_queue.task_done()
+
+    # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+    symbol_count_lock.acquire()
+    for ref_pos in range(len(symbol_counts_at_ref_pos)):
+        # Check for extraneous symbols
+        if len(symbol_counts_at_ref_pos[ref_pos].items()) > 6:
+
+            # We have extraneous symbols, so we need to loop
+            for symbol, count in symbol_counts_at_ref_pos[ref_pos].items():
+
+                # One of our main 6 symbols
+                if symbol == 'A':
+                    main_thread_symbol_counts[6 * ref_pos + 0] += count
+                elif symbol == 'C':
+                    main_thread_symbol_counts[6 * ref_pos + 1] += count
+                elif symbol == 'G':
+                    main_thread_symbol_counts[6 * ref_pos + 2] += count
+                elif symbol == 'T':
+                    main_thread_symbol_counts[6 * ref_pos + 3] += count
+                elif symbol == 'N':
+                    main_thread_symbol_counts[6 * ref_pos + 4] += count
+                elif symbol == '-':
+                    main_thread_symbol_counts[6 * ref_pos + 5] += count
+
+                # An extraneous symbol
+                else:
+                    communication_queue.put((ref_pos, symbol, count))
+
+        # No extraneous symbols
+        else:
+            main_thread_symbol_counts[6 * ref_pos + 0] += symbol_counts_at_ref_pos[ref_pos]['A']
+            main_thread_symbol_counts[6 * ref_pos + 1] += symbol_counts_at_ref_pos[ref_pos]['C']
+            main_thread_symbol_counts[6 * ref_pos + 2] += symbol_counts_at_ref_pos[ref_pos]['G']
+            main_thread_symbol_counts[6 * ref_pos + 3] += symbol_counts_at_ref_pos[ref_pos]['T']
+            main_thread_symbol_counts[6 * ref_pos + 4] += symbol_counts_at_ref_pos[ref_pos]['N']
+            main_thread_symbol_counts[6 * ref_pos + 5] += symbol_counts_at_ref_pos[ref_pos]['-']
+    
+    #for i in range(6*4, 6*4 + 6):
+        #print(main_thread_symbol_counts[i])
+
+    symbol_count_lock.release()
+    #print("Thread: ", symbol_counts_at_ref_pos[4])
+    input_queue.task_done()
+
 
 def run_amplipy_writer(output_queue, header, out_file, in_file):
     # Loop
@@ -984,7 +1030,8 @@ def run_amplipy(
 
     # if variant/consensus calling, initialize symbol counts
     if run_variants or run_consensus:
-        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
+        #symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
+        fake_symbol_counts_at_ref_pos = mp.Array('I', ref_genome_len * 6)
 
     total_a = 0
     total_b = 0
@@ -999,16 +1046,17 @@ def run_amplipy(
     
     input_queue = mp.JoinableQueue(MAX_QUEUE)
     output_queue = mp.JoinableQueue(MAX_QUEUE)
+    communication_queue = mp.Queue() # No max because this data is small
+    symbol_count_lock = mp.Lock()
 
     # TODO this should be a parameter
-    NUM_PROCESSES = 8
+    NUM_PROCESSES = 16
 
     worker_processes = NUM_PROCESSES - 2
     processes = []
-    communication = []
 
     for _ in range(worker_processes):
-        p = mp.Process(target=run_amplipy_worker, args=(input_queue, output_queue, in_aln.header, run_trim, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width, min_length, include_no_primer, run_variants, run_consensus, ref_genome_len,))
+        p = mp.Process(target=run_amplipy_worker, args=(input_queue, output_queue, in_aln.header, run_trim, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width, min_length, include_no_primer, run_variants, run_consensus, ref_genome_len, symbol_count_lock, fake_symbol_counts_at_ref_pos, communication_queue))
         p.start()
         processes.append(p)
 
@@ -1037,14 +1085,32 @@ def run_amplipy(
     input_queue.join()
 
     # TODO move this down
-    print_log("Finished processing!")
-
     p_i = 0
     for p in processes:
         p_i += 1
         #print("Joining %i" % p_i)
         p.join()
 
+    print_log("Gathering variant information...")
+
+    symbol_count_lock.acquire()
+    symbol_counts_at_ref_pos = []
+    for i in range(ref_genome_len):
+        symbol_counts_at_ref_pos.append({
+            'A':fake_symbol_counts_at_ref_pos[6 * i + 0],
+            'C':fake_symbol_counts_at_ref_pos[6 * i + 1],
+            'G':fake_symbol_counts_at_ref_pos[6 * i + 2],
+            'T':fake_symbol_counts_at_ref_pos[6 * i + 3],
+            'N':fake_symbol_counts_at_ref_pos[6 * i + 4],
+            '-':fake_symbol_counts_at_ref_pos[6 * i + 5]
+        })
+    symbol_count_lock.release()
+
+    while not communication_queue.empty():
+        (ref_pos, symbol, count) = communication_queue.get()
+        symbol_counts_at_ref_pos[ref_pos][symbol] = count + symbol_counts_at_ref_pos[ref_pos].get(symbol, 0)
+
+    print_log("Finished processing!")
     print_log("Waiting on output...")
 
     output_queue.put(QUEUE_SIGNAL_END)
