@@ -1205,7 +1205,7 @@ if __name__ == "__main__":
             sliding_window_width = args.sliding_window_width,
             include_no_primer = args.include_no_primer,
             run_trim = True,
-            num_processes=args.num_processes,
+            num_processes=args.processes,
         )
     elif args.command == 'variants':
         run_amplipy(
@@ -1216,7 +1216,7 @@ if __name__ == "__main__":
             min_freq_variants = args.min_freq,
             min_depth_variants = args.min_depth,
             run_variants = True,
-            num_processes=args.num_processes,
+            num_processes=args.processes,
         )
     elif args.command == 'consensus':
         run_amplipy(
@@ -1228,7 +1228,7 @@ if __name__ == "__main__":
             min_depth_consensus = args.min_depth,
             unknown_symbol = args.unknown_symbol,
             run_consensus = True,
-            num_processes=args.num_processes,
+            num_processes=args.processes,
         )
     elif args.command == 'aio':
         run_amplipy(
@@ -1251,5 +1251,5 @@ if __name__ == "__main__":
             run_trim = True,
             run_variants = True,
             run_consensus = True,
-            num_processes=args.num_processes,
+            num_processes=args.processes,
         )
