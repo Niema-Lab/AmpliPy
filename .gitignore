@@ -131,5 +131,5 @@ dmypy.json
 # Dataset ignores
 tests/
 sarscov2_v2_primers.bed
-time.py
+time.sh
 timing.csv

@@ -6,17 +6,20 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 # imports
 import argparse
 import gzip
-import pickle
 import pysam
 from collections import deque
 from datetime import datetime
 from os.path import isfile
 from sys import argv, stderr
+import time
+import multiprocessing as mp
 
 # constants
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 BUFSIZE = 1048576 # 1 MB
 PROGRESS_NUM_READS = 100000
+QUEUE_SIGNAL_END = -1
+MULTIPROCESSING_MAX_QUEUE = 256
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
@@ -43,7 +46,7 @@ BAM_CDIFF      = 8
 CONSUME_QUERY = [True, True,  False, False, True,  False, False, True, True] # CONSUME_QUERY[i] = True if CIGAR operation i consumes letters from query
 CONSUME_REF   = [True, False, True,  True,  False, False, False, True, True] # CONSUME_REF[i]   = True if CIGAR operation i consumes letters from reference
 
-# messages
+# Errors
 ERROR_TEXT_EMPTY_BED = "Empty BED file"
 ERROR_TEXT_FILE_EXISTS = "File already exists"
 ERROR_TEXT_FILE_NOT_FOUND = "File not found"
@@ -59,6 +62,9 @@ ERROR_TEXT_INVALID_VCF_EXTENSION = "Invalid variants extension (should be .vcf, 
 ERROR_TEXT_MULTIPLE_REF_SEQS = "Multiple sequences in FASTA file"
 ERROR_TEXT_NEGATIVE_MIN_QUALITY = "Minimum quality must be non-negative"
 ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET = "Primer position offset must be non-negative"
+ERROR_TEXT_INVALID_NUM_PROCESSES = "Number of processes must be at least 1"
+
+# Help (-h) messages
 HELP_TEXT_AMPLIPY_INDEX = "AmpliPy Index (PKL)"
 HELP_TEXT_CONSENSUS = "Consensus Sequence (FASTA)"
 HELP_TEXT_MIN_DEPTH_CONSENSUS = "Minimum depth to call consensus"
@@ -76,6 +82,7 @@ HELP_TEXT_TRIM_PRIMER_POS_OFFSET = "Primer position offset. Reads that occur at 
 HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH = "Width of sliding window (average quality of this window must be >= minimum quality threshold)"
 HELP_TEXT_UNKNOWN_SYMBOL = "Character to print in regions with less than minimum coverage"
 HELP_TEXT_VARIANTS = "Variant Calls (VCF)"
+HELP_TEXT_NUM_PROCESSES = "Total number of processes to use for multiprocessing"
 
 # print log
 def print_log(s='', end='\n'):
@@ -128,6 +135,7 @@ def parse_args():
     trim_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
     trim_parser.add_argument('-s', '--sliding_window_width', required=False, type=int, default=DEFAULT_SLIDING_WINDOW_WIDTH, help=HELP_TEXT_TRIM_SLIDING_WINDOW_WIDTH)
     trim_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
+    trim_parser.add_argument('-t', '--processes', required=False, type=int, default=1, help=HELP_TEXT_NUM_PROCESSES)
 
     # AmpliPy Variants args
     variants_parser = subparsers.add_parser("variants", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -137,6 +145,7 @@ def parse_args():
     variants_parser.add_argument('-mq', '--min_quality', required=False, type=int, default=DEFAULT_MIN_QUALITY, help=HELP_TEXT_MIN_QUAL)
     variants_parser.add_argument('-mf', '--min_freq', required=False, type=float, default=DEFAULT_MIN_FREQ_VARIANTS, help=HELP_TEXT_MIN_FREQ_VARIANTS)
     variants_parser.add_argument('-md', '--min_depth', required=False, type=int, default=DEFAULT_MIN_DEPTH_VARIANTS, help=HELP_TEXT_MIN_DEPTH_VARIANTS)
+    variants_parser.add_argument('-t', '--processes', required=False, type=int, default=1, help=HELP_TEXT_NUM_PROCESSES)
 
     # AmpliPy Consensus args
     consensus_parser = subparsers.add_parser("consensus", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -147,6 +156,7 @@ def parse_args():
     consensus_parser.add_argument('-mf', '--min_freq', required=False, type=float, default=DEFAULT_MIN_FREQ_CONSENSUS, help=HELP_TEXT_MIN_FREQ_CONSENSUS)
     consensus_parser.add_argument('-md', '--min_depth', required=False, type=int, default=DEFAULT_MIN_DEPTH_CONSENSUS, help=HELP_TEXT_MIN_DEPTH_CONSENSUS)
     consensus_parser.add_argument('-n', '--unknown_symbol', required=False, type=str, default=DEFAULT_UNKNOWN_SYMBOL, help=HELP_TEXT_UNKNOWN_SYMBOL)
+    consensus_parser.add_argument('-t', '--processes', required=False, type=int, default=1, help=HELP_TEXT_NUM_PROCESSES)
 
     # AmpliPy AIO (All-In-One) args
     aio_parser = subparsers.add_parser("aio", description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -166,6 +176,7 @@ def parse_args():
     aio_parser.add_argument('-mdv', '--min_depth_variants', required=False, type=int, default=DEFAULT_MIN_DEPTH_VARIANTS, help=HELP_TEXT_MIN_DEPTH_VARIANTS)
     aio_parser.add_argument('-n', '--unknown_symbol', required=False, type=str, default=DEFAULT_UNKNOWN_SYMBOL, help=HELP_TEXT_UNKNOWN_SYMBOL)
     aio_parser.add_argument('-e', '--include_no_primer', action='store_true', help=HELP_TEXT_TRIM_INCLUDE_READS_NO_PRIMER)
+    aio_parser.add_argument('-t', '--processes', required=False, type=int, default=1, help=HELP_TEXT_NUM_PROCESSES)
 
     # parse args and return
     return parser.parse_args()
@@ -704,154 +715,55 @@ def alleles_from_counts(symbol_counts):
     else:
         return total_coverage, sorted(((symbol_counts[k], symbol_counts[k]/total_coverage, k) for k in symbol_counts if symbol_counts[k] != 0), reverse=True)
 
-# run AmpliPy
-def run_amplipy(
-    untrimmed_reads_fn = None,
-    primer_fn = None,
-    reference_fn = None,
-    trimmed_reads_fn = None,
-    variants_fn = None,
-    consensus_fn = None,
-    primer_pos_offset = None,
-    min_length = None,
-    min_quality = None,
-    sliding_window_width = None,
-    min_freq_consensus = None,
-    min_freq_variants = None,
-    min_depth_consensus = None,
-    min_depth_variants = None,
-    unknown_symbol = None,
-    include_no_primer = None,
-    run_trim = False,
-    run_variants = False,
-    run_consensus = False,
+def run_amplipy_worker(
+    input_queue,
+    output_queue,
+    header,
+    run_trim,
+        min_primer_start,
+        max_primer_end,
+        max_primer_len,
+        min_quality,
+        sliding_window_width,
+        min_length,
+        include_no_primer,
+    run_variants,
+    run_consensus,
+        ref_genome_len,
+        symbol_count_lock,
+        main_thread_symbol_counts,
+        communication_queue
 ):
-    '''Run AmpliPy
-
-    Args:
-        ``untrimmed_reads_fn`` (``str``): Filename of untrimmed reads SAM/BAM
-
-        ``primer_fn`` (``str``): Filename of input primer BED
-
-        ``reference_fn`` (``str``): Filename of input reference genome FASTA
-
-        ``trimmed_reads_fn`` (``str``): Filename of trimmed reads SAM/BAM
-
-        ``variants_fn`` (``str``): Filename of output variants VCF
-
-        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
-
-        ``primer_pos_offset`` (``int``): Trimming: Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
-
-        ``min_length`` (``int``): Trimming: Minimum length of read to retain after trimming
-
-        ``min_quality`` (``int``): Trimming: Minimum quality threshold for sliding window to pass
-
-        ``sliding_window_width`` (``int``): Trimming: Width of sliding window
-
-        ``min_freq_consensus`` (``float``): Consensus: Minimum frequency for consensus calling
-
-        ``min_freq_variants`` (``float``): Variants: Minimum frequency for variant calling
-
-        ``min_depth_consensus`` (``int``): Consensus: Minimum depth for consensus calling
-
-        ``min_depth_variants`` (``int``): Variants: Minimum depth for consensus calling
-
-        ``unknown_symbol`` (``str``): Consensus: Symbol for unknown nucleotides in consensus (e.g. N)
-
-        ``include_no_primer`` (``bool``): Trimming: ``True`` to include reads with no primers trimmed, otherwise ``False``
-
-        ``run_trim`` (``bool``): ``True`` to trim reads, otherwise ``False``
-
-        ``run_variants`` (``bool``): ``True`` to call variants, otherwise ``False``
-
-        ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
-    '''
-    # validity check for non-file arguments
-    if primer_pos_offset is not None and primer_pos_offset < 0:
-        error("%s: %s" % (ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET, primer_pos_offset))
-    if min_length is not None and min_length < 1:
-        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_LENGTH, min_length))
-    if min_quality is not None and min_quality < 0:
-        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_QUALITY, min_quality))
-    if sliding_window_width is not None and sliding_window_width < 1:
-        error("%s: %s" % (ERROR_TEXT_INVALID_SLIDING_WINDOW_WIDTH, sliding_window_width))
-    if min_freq_consensus is not None and (min_freq_consensus < 0 or min_freq_consensus > 1):
-        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_consensus))
-    if min_freq_variants is not None and (min_freq_variants < 0 or min_freq_variants > 1):
-        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_variants))
-    if min_depth_consensus is not None and min_depth_consensus < 0:
-        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_consensus))
-    if min_depth_variants is not None and min_depth_variants < 0:
-        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_variants))
-    if unknown_symbol is not None and len(unknown_symbol) != 1:
-        error("%s: %s" % (ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH, unknown_symbol))
-
-    # print AmpliPy mode details
-    if not (run_trim or run_variants or run_consensus):
-        error("Not running any of the AmpliPy operations")
-    if run_trim and not (run_variants or run_consensus):
-        print_log("Executing AmpliPy Trim (v%s)" % VERSION)
-    elif run_variants and not (run_trim or run_consensus):
-        print_log("Executing AmpliPy Variants (v%s)" % VERSION)
-    elif run_consensus and not (run_trim or run_variants):
-        print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
-    else:
-        print_log("Executing AmpliPy All-In-One (v%s)" % VERSION)
-
-    # load input files and preprocess
-    if reference_fn is not None:
-        print_log("Loading reference genome: %s" % reference_fn)
-        ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
-        ref_genome_len = len(ref_genome_sequence)
-    if primer_fn is not None:
-        print_log("Loading primers: %s" % primer_fn)
-        primers = load_primers(primer_fn)
-        max_primer_len = max(end-start for start,end in primers)
-        print_log("Precalculating overlapping primers...")
-        min_primer_start, max_primer_end = find_overlapping_primers(ref_genome_len, primers, primer_pos_offset)
-    if run_trim:
-        print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
-        print_log("Output trimmed SAM/BAM: %s" % trimmed_reads_fn)
-        in_aln, out_aln = create_AlignmentFile_objects(untrimmed_reads_fn, trimmed_reads_fn)
-    else:
-        print_log("Input trimmed SAM/BAM: %s" % trimmed_reads_fn)
-        in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
-    if variants_fn is not None:
-        print_log("Output variants VCF: %s" % variants_fn)
-        out_vcf = create_VariantFile_object(variants_fn, ref_genome_ID)
-
-    # initialize counters
+    # Variables it expects to exist, do nothing yet
     NUM_UNMAPPED = 0
     NUM_NO_CIGAR = 0
-    if run_trim:
-        NUM_TRIMMED_PRIMER_START = 0
-        NUM_TRIMMED_PRIMER_END = 0
-        NUM_UNTRIMMED_PRIMER = 0
-        NUM_TRIMMED_QUALITY = 0
-        NUM_TOO_SHORT = 0
-        NUM_WRITTEN = 0
-
-    # if variant/consensus calling, initialize symbol counts
+    NUM_TRIMMED_PRIMER_START = 0
+    NUM_TRIMMED_PRIMER_END = 0
+    NUM_TRIMMED_QUALITY = 0
+    NUM_TOO_SHORT = 0
+    NUM_UNTRIMMED_PRIMER = 0
     if run_variants or run_consensus:
-        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
+        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)]
 
-    # process reads
-    print_log("Processing reads...")
-    s_i = 0
-    for s in in_aln:
-        # print progress update
-        s_i += 1
-        if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Processed %d reads..." % s_i)
+    while True:
+        s = input_queue.get()
+        if s == QUEUE_SIGNAL_END:
+            # Get out of loop and do our wrapup
+            break
+        s = pysam.AlignedSegment.fromstring(s, header=header)
+        #s_i += 1
+        #if s_i % PROGRESS_NUM_READS == 0:
+            #print_log("Processed %d reads..." % s_i)
+
+        output = [None, None]
 
         # skip unmapped reads
         if s.is_unmapped:
-            NUM_UNMAPPED += 1; continue
+            NUM_UNMAPPED += 1; input_queue.task_done(); continue
 
         # skip reads without CIGAR
         if s.cigartuples is None:
-            NUM_NO_CIGAR += 1; continue
+            NUM_NO_CIGAR += 1; input_queue.task_done(); continue
 
         # trim this read (if applicable)
         if run_trim:
@@ -872,7 +784,8 @@ def run_amplipy(
                 if not include_no_primer:
                     write_read = False
             if write_read:
-                out_aln.write(s); NUM_WRITTEN += 1
+                #out_aln.write(s); NUM_WRITTEN += 1
+                output_queue.put(s.to_string())
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
@@ -931,63 +844,349 @@ def run_amplipy(
                     if query_qual[q_pos] >= min_quality:
                         symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
 
-    # call variants and/or consensus (if applicable)
+        # signal to the queue we are done
+        input_queue.task_done()
+
     if run_variants or run_consensus:
-        if run_consensus:
-            consensus_symbols = list()
-        for ref_pos in range(ref_genome_len):
-            # get symbol counts
-            ref_symbol = ref_genome_sequence[ref_pos]
-            symbol_counts_here = symbol_counts_at_ref_pos[ref_pos]
-            total_depth_at_ref_pos, alleles_at_ref_pos = alleles_from_counts(symbol_counts_here)
+        # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+        symbol_count_lock.acquire()
+        for ref_pos in range(len(symbol_counts_at_ref_pos)):
+            # Check for extraneous symbols
+            if len(symbol_counts_at_ref_pos[ref_pos].items()) > 6:
 
-            # if calling consensus, add current position and insertions after current position
-            if run_consensus:
-                if len(alleles_at_ref_pos) != 0 and alleles_at_ref_pos[0][0] >= min_depth_consensus and alleles_at_ref_pos[0][1] >= min_freq_consensus:
-                    consensus_symbols.append(alleles_at_ref_pos[0][2])
-                else:
-                    consensus_symbols.append(unknown_symbol)
+                # We have extraneous symbols, so we need to loop
+                for symbol, count in symbol_counts_at_ref_pos[ref_pos].items():
 
-            # if calling variants, form and write VCF entry
-            if run_variants:
-                ref_symbol_count = 0; ref_symbol_freq = 0; alt_allele_symbols = list(); alt_allele_counts = list(); alt_allele_freqs = list()
-                for count, freq, symbol in alleles_at_ref_pos:
-                    if symbol == ref_symbol:
-                        ref_symbol_count = count; ref_symbol_freq = freq
-                    elif count >= min_depth_variants and freq >= min_freq_variants: # TODO should count be >= min_depth_variants? or total depth at this site?
-                        alt_allele_symbols.append(symbol); alt_allele_counts.append(count); alt_allele_freqs.append(freq)
-                if len(alt_allele_symbols) != 0:
-                    vcf_info = dict()
-                    vcf_info['DP'] = total_depth_at_ref_pos
-                    vcf_info['REF_DP'] = ref_symbol_count
-                    vcf_info['ALT_DP'] = ','.join(str(count) for count in alt_allele_counts)
-                    vcf_info['REF_FREQ'] = ref_symbol_freq
-                    vcf_info['ALT_FREQ'] = ','.join(str(freq) for freq in alt_allele_freqs)
-                    vcf_record = out_vcf.new_record(contig=ref_genome_ID, start=ref_pos, stop=ref_pos+1, alleles=[ref_symbol]+alt_allele_symbols, info=vcf_info, filter='PASS')
-                    if ref_symbol_count >= min_depth_variants and ref_symbol_freq >= min_freq_variants:
-                        vcf_record.samples['sample']['GT'] = tuple(range(len(alt_allele_symbols)+1))
+                    # One of our main 6 symbols
+                    if symbol == 'A':
+                        main_thread_symbol_counts[6 * ref_pos + 0] += count
+                    elif symbol == 'C':
+                        main_thread_symbol_counts[6 * ref_pos + 1] += count
+                    elif symbol == 'G':
+                        main_thread_symbol_counts[6 * ref_pos + 2] += count
+                    elif symbol == 'T':
+                        main_thread_symbol_counts[6 * ref_pos + 3] += count
+                    elif symbol == 'N':
+                        main_thread_symbol_counts[6 * ref_pos + 4] += count
+                    elif symbol == '-':
+                        main_thread_symbol_counts[6 * ref_pos + 5] += count
+
+                    # An extraneous symbol
                     else:
-                        vcf_record.samples['sample']['GT'] = tuple(range(1, len(alt_allele_symbols)+1))
-                    out_vcf.write(vcf_record)
+                        communication_queue.put((ref_pos, symbol, count))
 
-    # write consensus sequence to disk (if applicable)
-    if run_consensus:
-        if consensus_fn.lower().endswith('.gz'):
-            f = gzip.open(consensus_fn, 'wb')
-        else:
-            f = open(consensus_fn, 'w')
-        f.write('>sample\n%s\n' % ''.join(consensus_symbols)); f.close()
+            # No extraneous symbols
+            else:
+                main_thread_symbol_counts[6 * ref_pos + 0] += symbol_counts_at_ref_pos[ref_pos]['A']
+                main_thread_symbol_counts[6 * ref_pos + 1] += symbol_counts_at_ref_pos[ref_pos]['C']
+                main_thread_symbol_counts[6 * ref_pos + 2] += symbol_counts_at_ref_pos[ref_pos]['G']
+                main_thread_symbol_counts[6 * ref_pos + 3] += symbol_counts_at_ref_pos[ref_pos]['T']
+                main_thread_symbol_counts[6 * ref_pos + 4] += symbol_counts_at_ref_pos[ref_pos]['N']
+                main_thread_symbol_counts[6 * ref_pos + 5] += symbol_counts_at_ref_pos[ref_pos]['-']
+        symbol_count_lock.release()
 
-    # finish up
-    print_log("Finished Processing %d reads" % s_i)
-    print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
-    print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
+    input_queue.task_done()
+
+
+def run_amplipy_writer(output_queue, header, out_file, in_file):
+    # Loop
+    _, out_aln = create_AlignmentFile_objects(in_file, out_file)
+    while True:
+        s = output_queue.get()
+        if s == QUEUE_SIGNAL_END:
+            # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+            output_queue.task_done()
+            break
+        s = pysam.AlignedSegment.fromstring(s, header=header)
+        # Write
+        out_aln.write(s)
+
+        # Signal to queue this item is processed
+        output_queue.task_done()
+    # Close the output file, so it is written properly
+    out_aln.close()
+    
+# run AmpliPy
+def run_amplipy(
+    untrimmed_reads_fn = None,
+    primer_fn = None,
+    reference_fn = None,
+    trimmed_reads_fn = None,
+    variants_fn = None,
+    consensus_fn = None,
+    primer_pos_offset = None,
+    min_length = None,
+    min_quality = None,
+    sliding_window_width = None,
+    min_freq_consensus = None,
+    min_freq_variants = None,
+    min_depth_consensus = None,
+    min_depth_variants = None,
+    unknown_symbol = None,
+    include_no_primer = None,
+    run_trim = False,
+    run_variants = False,
+    run_consensus = False,
+    num_processes = 1
+):
+    '''Run AmpliPy
+
+    Args:
+        ``untrimmed_reads_fn`` (``str``): Filename of untrimmed reads SAM/BAM
+
+        ``primer_fn`` (``str``): Filename of input primer BED
+
+        ``reference_fn`` (``str``): Filename of input reference genome FASTA
+
+        ``trimmed_reads_fn`` (``str``): Filename of trimmed reads SAM/BAM
+
+        ``variants_fn`` (``str``): Filename of output variants VCF
+
+        ``consensus_fn`` (``str``): Filename of output consensus sequence FASTA
+
+        ``primer_pos_offset`` (``int``): Trimming: Primer position offset. Reads that occur at the specified offset positions relative to primer positions will also be trimmed
+
+        ``min_length`` (``int``): Trimming: Minimum length of read to retain after trimming
+
+        ``min_quality`` (``int``): Trimming: Minimum quality threshold for sliding window to pass
+
+        ``sliding_window_width`` (``int``): Trimming: Width of sliding window
+
+        ``min_freq_consensus`` (``float``): Consensus: Minimum frequency for consensus calling
+
+        ``min_freq_variants`` (``float``): Variants: Minimum frequency for variant calling
+
+        ``min_depth_consensus`` (``int``): Consensus: Minimum depth for consensus calling
+
+        ``min_depth_variants`` (``int``): Variants: Minimum depth for consensus calling
+
+        ``unknown_symbol`` (``str``): Consensus: Symbol for unknown nucleotides in consensus (e.g. N)
+
+        ``include_no_primer`` (``bool``): Trimming: ``True`` to include reads with no primers trimmed, otherwise ``False``
+
+        ``run_trim`` (``bool``): ``True`` to trim reads, otherwise ``False``
+
+        ``run_variants`` (``bool``): ``True`` to call variants, otherwise ``False``
+
+        ``run_consensus`` (``bool``): ``True`` to call consensus sequence, otherwise ``False``
+
+        ``num_processes`` (``int``): Total number of processes to use for multiprocessing
+    '''
+    # validity check for non-file arguments
+    if primer_pos_offset is not None and primer_pos_offset < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_PRIMER_POS_OFFSET, primer_pos_offset))
+    if min_length is not None and min_length < 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_LENGTH, min_length))
+    if min_quality is not None and min_quality < 0:
+        error("%s: %s" % (ERROR_TEXT_NEGATIVE_MIN_QUALITY, min_quality))
+    if sliding_window_width is not None and sliding_window_width < 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_SLIDING_WINDOW_WIDTH, sliding_window_width))
+    if min_freq_consensus is not None and (min_freq_consensus < 0 or min_freq_consensus > 1):
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_consensus))
+    if min_freq_variants is not None and (min_freq_variants < 0 or min_freq_variants > 1):
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_FREQ, min_freq_variants))
+    if min_depth_consensus is not None and min_depth_consensus < 0:
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_consensus))
+    if min_depth_variants is not None and min_depth_variants < 0:
+        error("%s: %s" % (ERROR_TEXT_INVALID_MIN_DEPTH, min_depth_variants))
+    if unknown_symbol is not None and len(unknown_symbol) != 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_UNKNOWN_SYMBOL_LENGTH, unknown_symbol))
+    if num_processes < 1:
+        error("%s: %s" % (ERROR_TEXT_INVALID_NUM_PROCESSES, num_processes))
+
+    # print AmpliPy mode details
+    if not (run_trim or run_variants or run_consensus):
+        error("Not running any of the AmpliPy operations")
+    if run_trim and not (run_variants or run_consensus):
+        print_log("Executing AmpliPy Trim (v%s)" % VERSION)
+    elif run_variants and not (run_trim or run_consensus):
+        print_log("Executing AmpliPy Variants (v%s)" % VERSION)
+    elif run_consensus and not (run_trim or run_variants):
+        print_log("Executing AmpliPy Consensus (v%s)" % VERSION)
+    else:
+        print_log("Executing AmpliPy All-In-One (v%s)" % VERSION)
+
+    # load input files and preprocess
+    if reference_fn is not None:
+        print_log("Loading reference genome: %s" % reference_fn)
+        ref_genome_ID, ref_genome_sequence = load_ref_genome(reference_fn)
+        ref_genome_len = len(ref_genome_sequence)
+    if primer_fn is not None:
+        print_log("Loading primers: %s" % primer_fn)
+        primers = load_primers(primer_fn)
+        max_primer_len = max(end-start for start,end in primers)
+        print_log("Precalculating overlapping primers...")
+        min_primer_start, max_primer_end = find_overlapping_primers(ref_genome_len, primers, primer_pos_offset)
     if run_trim:
-        print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
-        print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
-        print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
-        print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
-        print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
+        print_log("Input untrimmed SAM/BAM: %s" % untrimmed_reads_fn)
+        print_log("Output trimmed SAM/BAM: %s" % trimmed_reads_fn)
+        in_aln, _ = create_AlignmentFile_objects(untrimmed_reads_fn, None)
+    else:
+        print_log("Input trimmed SAM/BAM: %s" % trimmed_reads_fn)
+        in_aln, DUMMY = create_AlignmentFile_objects(trimmed_reads_fn, None)
+    if variants_fn is not None:
+        print_log("Output variants VCF: %s" % variants_fn)
+        out_vcf = create_VariantFile_object(variants_fn, ref_genome_ID)
+
+    if num_processes > 1:
+        print_log("Running multiprocessesed with %s threads" % num_processes)
+
+        # initialize counters
+        NUM_UNMAPPED = 0
+        NUM_NO_CIGAR = 0
+        if run_trim:
+            NUM_TRIMMED_PRIMER_START = 0
+            NUM_TRIMMED_PRIMER_END = 0
+            NUM_UNTRIMMED_PRIMER = 0
+            NUM_TRIMMED_QUALITY = 0
+            NUM_TOO_SHORT = 0
+            NUM_WRITTEN = 0
+
+        # if variant/consensus calling, initialize symbol counts
+        if run_variants or run_consensus:
+            fake_symbol_counts_at_ref_pos = mp.Array('I', ref_genome_len * 6)
+
+        total_a = 0
+        total_b = 0
+        total_c = 0
+        ind = 0
+        # process reads
+
+        print_log("Starting processes...")
+        
+        input_queue = mp.JoinableQueue(MULTIPROCESSING_MAX_QUEUE)
+        output_queue = mp.JoinableQueue(MULTIPROCESSING_MAX_QUEUE)
+        communication_queue = mp.Queue() # No max because this data is small
+        symbol_count_lock = mp.Lock()
+
+        worker_processes = num_processes - 2
+        processes = []
+
+        for _ in range(worker_processes):
+            p = mp.Process(target=run_amplipy_worker, args=(input_queue, output_queue, in_aln.header, run_trim, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width, min_length, include_no_primer, run_variants, run_consensus, ref_genome_len, symbol_count_lock, fake_symbol_counts_at_ref_pos, communication_queue))
+            p.start()
+            processes.append(p)
+
+        writer = mp.Process(target=run_amplipy_writer, args=(output_queue, in_aln.header, trimmed_reads_fn, untrimmed_reads_fn))
+        writer.start()
+
+        print_log("Reading reads...")
+        i_s = 0
+        for s in in_aln:
+            i_s += 1
+            if (i_s % 100 == 0):
+                # TODO: check counters?
+                pass
+            input_queue.put(s.to_string())
+
+        print_log("Finished reading!")
+
+        for _ in range(worker_processes):
+            input_queue.put(QUEUE_SIGNAL_END)
+        input_queue.close()
+
+        print_log("Waiting on processing...")
+
+        input_queue.join()
+
+        p_i = 0
+        for p in processes:
+            p_i += 1
+            p.join()
+
+        print_log("Gathering variant information...")
+
+        symbol_count_lock.acquire()
+        symbol_counts_at_ref_pos = []
+        for i in range(ref_genome_len):
+            symbol_counts_at_ref_pos.append({
+                'A':fake_symbol_counts_at_ref_pos[6 * i + 0],
+                'C':fake_symbol_counts_at_ref_pos[6 * i + 1],
+                'G':fake_symbol_counts_at_ref_pos[6 * i + 2],
+                'T':fake_symbol_counts_at_ref_pos[6 * i + 3],
+                'N':fake_symbol_counts_at_ref_pos[6 * i + 4],
+                '-':fake_symbol_counts_at_ref_pos[6 * i + 5]
+            })
+        symbol_count_lock.release()
+
+        while not communication_queue.empty():
+            (ref_pos, symbol, count) = communication_queue.get()
+            symbol_counts_at_ref_pos[ref_pos][symbol] = count + symbol_counts_at_ref_pos[ref_pos].get(symbol, 0)
+
+        print_log("Finished processing!")
+        print_log("Waiting on output...")
+
+        output_queue.put(QUEUE_SIGNAL_END)
+        output_queue.close()
+        output_queue.join()
+
+        print_log("Finished output!")
+
+        writer.join()
+
+        print("Joined all processes! Outputting data...")
+
+        # call variants and/or consensus (if applicable)
+        if run_variants or run_consensus:
+            if run_consensus:
+                consensus_symbols = list()
+            for ref_pos in range(ref_genome_len):
+                # get symbol counts
+                ref_symbol = ref_genome_sequence[ref_pos]
+                symbol_counts_here = symbol_counts_at_ref_pos[ref_pos]
+                total_depth_at_ref_pos, alleles_at_ref_pos = alleles_from_counts(symbol_counts_here)
+
+                # if calling consensus, add current position and insertions after current position
+                if run_consensus:
+                    if len(alleles_at_ref_pos) != 0 and alleles_at_ref_pos[0][0] >= min_depth_consensus and alleles_at_ref_pos[0][1] >= min_freq_consensus:
+                        consensus_symbols.append(alleles_at_ref_pos[0][2])
+                    else:
+                        consensus_symbols.append(unknown_symbol)
+
+                # if calling variants, form and write VCF entry
+                if run_variants:
+                    ref_symbol_count = 0; ref_symbol_freq = 0; alt_allele_symbols = list(); alt_allele_counts = list(); alt_allele_freqs = list()
+                    for count, freq, symbol in alleles_at_ref_pos:
+                        if symbol == ref_symbol:
+                            ref_symbol_count = count; ref_symbol_freq = freq
+                        elif count >= min_depth_variants and freq >= min_freq_variants: # TODO should count be >= min_depth_variants? or total depth at this site?
+                            alt_allele_symbols.append(symbol); alt_allele_counts.append(count); alt_allele_freqs.append(freq)
+                    if len(alt_allele_symbols) != 0:
+                        vcf_info = dict()
+                        vcf_info['DP'] = total_depth_at_ref_pos
+                        vcf_info['REF_DP'] = ref_symbol_count
+                        vcf_info['ALT_DP'] = ','.join(str(count) for count in alt_allele_counts)
+                        vcf_info['REF_FREQ'] = ref_symbol_freq
+                        vcf_info['ALT_FREQ'] = ','.join(str(freq) for freq in alt_allele_freqs)
+                        vcf_record = out_vcf.new_record(contig=ref_genome_ID, start=ref_pos, stop=ref_pos+1, alleles=[ref_symbol]+alt_allele_symbols, info=vcf_info, filter='PASS')
+                        if ref_symbol_count >= min_depth_variants and ref_symbol_freq >= min_freq_variants:
+                            vcf_record.samples['sample']['GT'] = tuple(range(len(alt_allele_symbols)+1))
+                        else:
+                            vcf_record.samples['sample']['GT'] = tuple(range(1, len(alt_allele_symbols)+1))
+                        out_vcf.write(vcf_record)
+
+        # write consensus sequence to disk (if applicable)
+        if run_consensus:
+            if consensus_fn.lower().endswith('.gz'):
+                f = gzip.open(consensus_fn, 'wb')
+            else:
+                f = open(consensus_fn, 'w')
+            f.write('>sample\n%s\n' % ''.join(consensus_symbols)); f.close()
+
+        # finish up
+        s_i = 0
+        print_log("Finished Processing %d reads" % s_i)
+        print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
+        print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
+        if run_trim:
+            print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
+            print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
+            print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
+            print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
+            print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
+    else:
+        error("Single threaded implementation to be readded!")
+        print_log("Running with a single process!")
 
 # main content
 if __name__ == "__main__":
