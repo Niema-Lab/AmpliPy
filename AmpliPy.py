@@ -6,7 +6,6 @@ AmpliPy: Python toolkit for viral amplicon sequencing
 # imports
 import argparse
 import gzip
-import pickle
 import pysam
 from collections import deque
 from datetime import datetime
@@ -734,7 +733,8 @@ def run_amplipy_worker(
     NUM_TRIMMED_QUALITY = 0
     NUM_TOO_SHORT = 0
     NUM_UNTRIMMED_PRIMER = 0
-    symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)]
+    if run_variants or run_consensus:
+        symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)]
 
     while True:
         s = input_queue.get()
@@ -838,47 +838,44 @@ def run_amplipy_worker(
         # signal to the queue we are done
         input_queue.task_done()
 
-    # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
-    symbol_count_lock.acquire()
-    for ref_pos in range(len(symbol_counts_at_ref_pos)):
-        # Check for extraneous symbols
-        if len(symbol_counts_at_ref_pos[ref_pos].items()) > 6:
+    if run_variants or run_consensus:
+        # Put summary info into shared memory (NUM_*, symbol_counts_at_ref_pos)
+        symbol_count_lock.acquire()
+        for ref_pos in range(len(symbol_counts_at_ref_pos)):
+            # Check for extraneous symbols
+            if len(symbol_counts_at_ref_pos[ref_pos].items()) > 6:
 
-            # We have extraneous symbols, so we need to loop
-            for symbol, count in symbol_counts_at_ref_pos[ref_pos].items():
+                # We have extraneous symbols, so we need to loop
+                for symbol, count in symbol_counts_at_ref_pos[ref_pos].items():
 
-                # One of our main 6 symbols
-                if symbol == 'A':
-                    main_thread_symbol_counts[6 * ref_pos + 0] += count
-                elif symbol == 'C':
-                    main_thread_symbol_counts[6 * ref_pos + 1] += count
-                elif symbol == 'G':
-                    main_thread_symbol_counts[6 * ref_pos + 2] += count
-                elif symbol == 'T':
-                    main_thread_symbol_counts[6 * ref_pos + 3] += count
-                elif symbol == 'N':
-                    main_thread_symbol_counts[6 * ref_pos + 4] += count
-                elif symbol == '-':
-                    main_thread_symbol_counts[6 * ref_pos + 5] += count
+                    # One of our main 6 symbols
+                    if symbol == 'A':
+                        main_thread_symbol_counts[6 * ref_pos + 0] += count
+                    elif symbol == 'C':
+                        main_thread_symbol_counts[6 * ref_pos + 1] += count
+                    elif symbol == 'G':
+                        main_thread_symbol_counts[6 * ref_pos + 2] += count
+                    elif symbol == 'T':
+                        main_thread_symbol_counts[6 * ref_pos + 3] += count
+                    elif symbol == 'N':
+                        main_thread_symbol_counts[6 * ref_pos + 4] += count
+                    elif symbol == '-':
+                        main_thread_symbol_counts[6 * ref_pos + 5] += count
 
-                # An extraneous symbol
-                else:
-                    communication_queue.put((ref_pos, symbol, count))
+                    # An extraneous symbol
+                    else:
+                        communication_queue.put((ref_pos, symbol, count))
 
-        # No extraneous symbols
-        else:
-            main_thread_symbol_counts[6 * ref_pos + 0] += symbol_counts_at_ref_pos[ref_pos]['A']
-            main_thread_symbol_counts[6 * ref_pos + 1] += symbol_counts_at_ref_pos[ref_pos]['C']
-            main_thread_symbol_counts[6 * ref_pos + 2] += symbol_counts_at_ref_pos[ref_pos]['G']
-            main_thread_symbol_counts[6 * ref_pos + 3] += symbol_counts_at_ref_pos[ref_pos]['T']
-            main_thread_symbol_counts[6 * ref_pos + 4] += symbol_counts_at_ref_pos[ref_pos]['N']
-            main_thread_symbol_counts[6 * ref_pos + 5] += symbol_counts_at_ref_pos[ref_pos]['-']
-    
-    #for i in range(6*4, 6*4 + 6):
-        #print(main_thread_symbol_counts[i])
+            # No extraneous symbols
+            else:
+                main_thread_symbol_counts[6 * ref_pos + 0] += symbol_counts_at_ref_pos[ref_pos]['A']
+                main_thread_symbol_counts[6 * ref_pos + 1] += symbol_counts_at_ref_pos[ref_pos]['C']
+                main_thread_symbol_counts[6 * ref_pos + 2] += symbol_counts_at_ref_pos[ref_pos]['G']
+                main_thread_symbol_counts[6 * ref_pos + 3] += symbol_counts_at_ref_pos[ref_pos]['T']
+                main_thread_symbol_counts[6 * ref_pos + 4] += symbol_counts_at_ref_pos[ref_pos]['N']
+                main_thread_symbol_counts[6 * ref_pos + 5] += symbol_counts_at_ref_pos[ref_pos]['-']
+        symbol_count_lock.release()
 
-    symbol_count_lock.release()
-    #print("Thread: ", symbol_counts_at_ref_pos[4])
     input_queue.task_done()
 
 
