@@ -827,12 +827,10 @@ def run_amplipy(
 
     # process reads
     print_log("Processing reads...")
-    s_i = 0
-    for s in in_aln:
+    for s_i, s in enumerate(in_aln):
         # print progress update
-        s_i += 1
-        if s_i % PROGRESS_NUM_READS == 0:
-            print_log("Processed %d reads..." % s_i)
+        if s_i % PROGRESS_NUM_READS == 0 and s_i != 0:
+            print_log("Processed %d reads..." % (s_i))
 
         # skip unmapped reads
         if s.is_unmapped:
