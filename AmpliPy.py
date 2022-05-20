@@ -14,9 +14,9 @@ from os.path import isfile
 from sys import argv, stderr
 
 # constants
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 BUFSIZE = 1048576 # 1 MB
-PROGRESS_NUM_READS = 100000
+PROGRESS_NUM_READS = 50000
 
 # default arguments
 DEFAULT_MIN_DEPTH_CONSENSUS = 10
@@ -821,17 +821,6 @@ def run_amplipy(
         print_log("Output variants VCF: %s" % variants_fn)
         out_vcf = create_VariantFile_object(variants_fn, ref_genome_ID)
 
-    # initialize counters
-    NUM_UNMAPPED = 0
-    NUM_NO_CIGAR = 0
-    if run_trim:
-        NUM_TRIMMED_PRIMER_START = 0
-        NUM_TRIMMED_PRIMER_END = 0
-        NUM_UNTRIMMED_PRIMER = 0
-        NUM_TRIMMED_QUALITY = 0
-        NUM_TOO_SHORT = 0
-        NUM_WRITTEN = 0
-
     # if variant/consensus calling, initialize symbol counts
     if run_variants or run_consensus:
         symbol_counts_at_ref_pos = [{'A':0,'C':0,'G':0,'T':0,'N':0,'-':0} for _ in range(ref_genome_len)] # [i] = symbol counts at reference position i
@@ -847,32 +836,19 @@ def run_amplipy(
 
         # skip unmapped reads
         if s.is_unmapped:
-            NUM_UNMAPPED += 1; continue
+            continue
 
         # skip reads without CIGAR
         if s.cigartuples is None:
-            NUM_NO_CIGAR += 1; continue
+            continue
 
         # trim this read (if applicable)
         if run_trim:
             trimmed_primer_start, trimmed_primer_end, trimmed_quality = trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, sliding_window_width)
-            if trimmed_primer_start:
-                NUM_TRIMMED_PRIMER_START += 1
-            if trimmed_primer_end:
-                NUM_TRIMMED_PRIMER_END += 1
-            if trimmed_quality:
-                NUM_TRIMMED_QUALITY += 1
 
             # write this read (if applicable)
-            write_read = True
-            if s.reference_length < min_length:
-                NUM_TOO_SHORT += 1; write_read = False
-            if not (trimmed_primer_start or trimmed_primer_end):
-                NUM_UNTRIMMED_PRIMER += 1
-                if not include_no_primer:
-                    write_read = False
-            if write_read:
-                out_aln.write(s); NUM_WRITTEN += 1
+            if s.reference_length >= min_length and (trimmed_primer_start or trimmed_primer_end or include_no_primer):
+                out_aln.write(s)
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
@@ -980,14 +956,6 @@ def run_amplipy(
 
     # finish up
     print_log("Finished Processing %d reads" % s_i)
-    print_log("- Number of Unmapped Reads: %d" % NUM_UNMAPPED)
-    print_log("- Number of Mapped Reads Without CIGAR: %d" % NUM_NO_CIGAR)
-    if run_trim:
-        print_log("- Number of Mapped Reads With Primer Trimmed at Start: %d" % NUM_TRIMMED_PRIMER_START)
-        print_log("- Number of Mapped Reads With Primer Trimmed at End: %d" % NUM_TRIMMED_PRIMER_END)
-        print_log("- Number of Mapped Reads With No Primers Trimmed: %d" % NUM_UNTRIMMED_PRIMER)
-        print_log("- Number of Mapped Reads That Were Quality Trimmed: %d" % NUM_TRIMMED_QUALITY)
-        print_log("- Number of Mapped Reads Written to Output: %d" % NUM_WRITTEN)
 
 # main content
 if __name__ == "__main__":
