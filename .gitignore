@@ -1,3 +1,11 @@
+# AmpliPy input/output
+*.sam
+*.bam
+*.bai
+*.vcf
+*.fas
+*.prof
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
