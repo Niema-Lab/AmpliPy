@@ -686,6 +686,72 @@ def trim_read(s, min_primer_start, max_primer_end, max_primer_len, min_quality, 
             s.cigartuples = fix_cigar(reversed(new_cigar)) # I appended to new_cigar backwards, so it needs to be reversed at the end
     return trimmed_primer_start, trimmed_primer_end, trimmed_quality
 
+# update base counts given a read
+def update_base_counts(symbol_counts_at_ref_pos, s, min_quality):
+    '''Update base counts based on an individual read
+
+    Args:
+        ``symbol_counts_at_ref_pos`` (``list``): The symbol counts at each reference position (global data structure that will be updated)
+
+        ``s`` (``pysam.AlignedSegment``): The mapped read to parse (see: https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment)
+
+        ``min_quality`` (``int``): Minimum quality threshold for sliding window to pass
+    '''
+    query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
+    query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
+    query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
+    query_qual = s.query_qualities
+    ref_start = s.reference_start # 0-based leftmost coordinate
+    ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
+    pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
+    len_pos_pairs = len(pos_pairs)
+    i = 0
+    while i < len_pos_pairs:
+        # get this pair and move to next
+        q_pos, r_pos = pos_pairs[i]; i += 1
+
+        # deletion
+        if q_pos is None:
+            symbol_counts_at_ref_pos[r_pos]['-'] += 1
+
+        # too low of quality (so ignore)
+        elif query_qual[q_pos] < min_quality:
+            continue
+
+        # soft-clipped beginning (so ignore)
+        elif q_pos < query_start:
+            continue
+
+        # soft-clipped end (so early terminate)
+        elif q_pos >= query_end:
+            break
+
+        # insertion
+        elif r_pos is None:
+            # search for next reference match
+            q_pos_insertion_start = q_pos
+            while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
+                q_pos, r_pos = pos_pairs[i]; i += 1
+            if r_pos == 0:
+                insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
+            else:
+                insertion_seq = query_seq[q_pos_insertion_start - 1 : q_pos] # end needs to be exclusive because this is the NEXT match, and I need to include the letter JUST BEFORE the insertion for the sake of variant calling
+            if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
+                ref_insertion_pos = ref_end
+            else: # otherwise, this is a normal insertion before r_pos
+                ref_insertion_pos = r_pos
+                i -= 1 # I need to handle this reference position next loop
+            ref_insertion_pos = max(ref_insertion_pos-1, 0) # move back 1
+            if insertion_seq in symbol_counts_at_ref_pos[ref_insertion_pos]:
+                symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] += 1
+            else:
+                symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] = 1
+
+        # match/mismatch
+        else:
+            if query_qual[q_pos] >= min_quality:
+                symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
+
 # get the alleles at a given reference position from the symbol counts at that position
 def alleles_from_counts(symbol_counts):
     '''Get the alleles at a given reference position from the symbol counts at that position
@@ -832,12 +898,8 @@ def run_amplipy(
         if s_i % PROGRESS_NUM_READS == 0 and s_i != 0:
             print_log("Processed %d reads..." % (s_i))
 
-        # skip unmapped reads
-        if s.is_unmapped:
-            continue
-
-        # skip reads without CIGAR
-        if s.cigartuples is None:
+        # skip unmapped reads and reads without CIGAR
+        if s.is_unmapped or s.cigartuples is None:
             continue
 
         # trim this read (if applicable)
@@ -850,60 +912,7 @@ def run_amplipy(
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
-            query_start = s.query_alignment_start # This the index of the first base in seq that is not soft-clipped
-            query_end = s.query_alignment_end # This the index JUST PAST the last base in seq that is not soft-clipped
-            query_seq = s.query_sequence.upper() # read sequence bases, including soft clipped bases (None if not present)
-            query_qual = s.query_qualities
-            ref_start = s.reference_start # 0-based leftmost coordinate
-            ref_end = s.reference_end # reference_end points to ONE PAST the last aligned residue
-            pos_pairs = list(s.get_aligned_pairs()) # list of (q_pos, r_pos) tuples
-            len_pos_pairs = len(pos_pairs)
-            i = 0
-            while i < len_pos_pairs:
-                # get this pair and move to next
-                q_pos, r_pos = pos_pairs[i]; i += 1
-
-                # deletion
-                if q_pos is None:
-                    symbol_counts_at_ref_pos[r_pos]['-'] += 1
-
-                # too low of quality (so ignore)
-                elif query_qual[q_pos] < min_quality:
-                    continue
-
-                # soft-clipped beginning (so ignore)
-                elif q_pos < query_start:
-                    continue
-
-                # soft-clipped end (so early terminate)
-                elif q_pos >= query_end:
-                    break
-
-                # insertion
-                elif r_pos is None:
-                    # search for next reference match
-                    q_pos_insertion_start = q_pos
-                    while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
-                        q_pos, r_pos = pos_pairs[i]; i += 1
-                    if r_pos == 0:
-                        insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
-                    else:
-                        insertion_seq = query_seq[q_pos_insertion_start - 1 : q_pos] # end needs to be exclusive because this is the NEXT match, and I need to include the letter JUST BEFORE the insertion for the sake of variant calling
-                    if r_pos is None: # never found another reference match (so this is an insertion at the end of the alignment)
-                        ref_insertion_pos = ref_end
-                    else: # otherwise, this is a normal insertion before r_pos
-                        ref_insertion_pos = r_pos
-                        i -= 1 # I need to handle this reference position next loop
-                    ref_insertion_pos = max(ref_insertion_pos-1, 0) # move back 1
-                    if insertion_seq in symbol_counts_at_ref_pos[ref_insertion_pos]:
-                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] += 1
-                    else:
-                        symbol_counts_at_ref_pos[ref_insertion_pos][insertion_seq] = 1
-
-                # match/mismatch
-                else:
-                    if query_qual[q_pos] >= min_quality:
-                        symbol_counts_at_ref_pos[r_pos][query_seq[q_pos]] += 1
+            update_base_counts(symbol_counts_at_ref_pos, s, min_quality) # TODO
 
     # call variants and/or consensus (if applicable)
     if run_variants or run_consensus:
