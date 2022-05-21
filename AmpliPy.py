@@ -730,7 +730,7 @@ def update_base_counts(symbol_counts_at_ref_pos, s, min_quality):
         elif r_pos is None:
             # search for next reference match
             q_pos_insertion_start = q_pos
-            while q_pos < query_end and query_qual[q_pos] >= min_quality and r_pos is None:
+            while r_pos is None and q_pos < query_end and query_qual[q_pos] >= min_quality:
                 q_pos, r_pos = pos_pairs[i]; i += 1
             if r_pos == 0:
                 insertion_seq = query_seq[q_pos_insertion_start : q_pos + 1] # if this is an insertion before the reference genome, I need to add 1 letter to the end for the sake of variant calling
@@ -912,12 +912,12 @@ def run_amplipy(
 
         # if variant/consensus calling, update base counts
         if run_variants or run_consensus:
-            update_base_counts(symbol_counts_at_ref_pos, s, min_quality) # TODO
+            update_base_counts(symbol_counts_at_ref_pos, s, min_quality)
 
     # call variants and/or consensus (if applicable)
     if run_variants or run_consensus:
         if run_consensus:
-            consensus_symbols = list()
+            consensus_symbols = [unknown_symbol]*ref_genome_len
         for ref_pos in range(ref_genome_len):
             # get symbol counts
             ref_symbol = ref_genome_sequence[ref_pos]
@@ -925,21 +925,19 @@ def run_amplipy(
             total_depth_at_ref_pos, alleles_at_ref_pos = alleles_from_counts(symbol_counts_here)
 
             # if calling consensus, add current position and insertions after current position
-            if run_consensus:
-                if len(alleles_at_ref_pos) != 0 and alleles_at_ref_pos[0][0] >= min_depth_consensus and alleles_at_ref_pos[0][1] >= min_freq_consensus:
-                    consensus_symbols.append(alleles_at_ref_pos[0][2])
-                else:
-                    consensus_symbols.append(unknown_symbol)
+            if run_consensus and len(alleles_at_ref_pos) != 0 and alleles_at_ref_pos[0][0] >= min_depth_consensus and alleles_at_ref_pos[0][1] >= min_freq_consensus:
+                consensus_symbols[ref_pos] = alleles_at_ref_pos[0][2]
 
             # if calling variants, form and write VCF entry
             if run_variants:
-                ref_symbol_count = 0; ref_symbol_freq = 0; alt_allele_symbols = list(); alt_allele_counts = list(); alt_allele_freqs = list()
+                tot_count = 0; ref_symbol_count = 0; ref_symbol_freq = 0; alt_allele_symbols = list(); alt_allele_counts = list(); alt_allele_freqs = list()
                 for count, freq, symbol in alleles_at_ref_pos:
+                    tot_count += count
                     if symbol == ref_symbol:
                         ref_symbol_count = count; ref_symbol_freq = freq
-                    elif count >= min_depth_variants and freq >= min_freq_variants: # TODO should count be >= min_depth_variants? or total depth at this site?
+                    elif freq >= min_freq_variants:
                         alt_allele_symbols.append(symbol); alt_allele_counts.append(count); alt_allele_freqs.append(freq)
-                if len(alt_allele_symbols) != 0:
+                if tot_count >= min_depth_variants and len(alt_allele_symbols) != 0:
                     vcf_info = dict()
                     vcf_info['DP'] = total_depth_at_ref_pos
                     vcf_info['REF_DP'] = ref_symbol_count
